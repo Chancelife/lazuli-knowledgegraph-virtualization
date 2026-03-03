@@ -1,0 +1,271 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: #030712;
+  color: #e2e8f0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  overflow: hidden;
+  width: 100vw;
+  height: 100vh;
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+  position: relative;
+}
+
+/* ── App Shell ─────────────────────────────────────────────────────────────── */
+.app {
+  width: 100vw;
+  height: 100vh;
+  position: relative;
+  overflow: hidden;
+}
+
+.canvas-wrap {
+  position: absolute;
+  inset: 0;
+}
+
+/* ── Title ──────────────────────────────────────────────────────────────────── */
+.title-block {
+  position: absolute;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  z-index: 10;
+  pointer-events: none;
+  user-select: none;
+}
+
+.title-block h1 {
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  background: linear-gradient(90deg, #22d3ee 0%, #a855f7 50%, #f472b6 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.title-block p {
+  margin-top: 4px;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  color: #475569;
+}
+
+/* ── Filter Bar ─────────────────────────────────────────────────────────────── */
+.filter-bar {
+  position: absolute;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  z-index: 10;
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 999px;
+  padding: 7px 14px;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.filter-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: transparent;
+  color: #64748b;
+  font-size: 0.8rem;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.filter-btn:hover {
+  color: #94a3b8;
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.filter-btn.active {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--cat-color);
+  border-color: var(--cat-color);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--cat-color) 20%, transparent);
+}
+
+.filter-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--cat-color);
+  opacity: 0.4;
+  transition: opacity 0.2s;
+  flex-shrink: 0;
+}
+
+.filter-btn.active .filter-dot {
+  opacity: 1;
+  box-shadow: 0 0 6px var(--cat-color);
+}
+
+/* ── Info Panel ─────────────────────────────────────────────────────────────── */
+.info-panel {
+  position: absolute;
+  right: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 272px;
+  background: rgba(10, 15, 30, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 22px 20px 20px;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  z-index: 10;
+  animation: panelIn 0.22s ease;
+}
+
+@keyframes panelIn {
+  from { opacity: 0; transform: translateY(-50%) translateX(14px); }
+  to   { opacity: 1; transform: translateY(-50%) translateX(0);    }
+}
+
+.panel-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: transparent;
+  color: #64748b;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, border-color 0.15s;
+}
+.panel-close:hover { color: #e2e8f0; border-color: rgba(255,255,255,0.3); }
+
+.panel-category {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.panel-title {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: #f1f5f9;
+  margin-bottom: 10px;
+}
+
+.panel-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.level-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 999px;
+  color: #0f172a;
+  letter-spacing: 0.04em;
+}
+
+.years-text {
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.exp-bar-wrap {
+  margin-bottom: 14px;
+}
+
+.exp-bar-label {
+  font-size: 0.68rem;
+  color: #475569;
+  margin-bottom: 4px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.exp-bar-track {
+  height: 4px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.exp-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
+
+.panel-description {
+  font-size: 0.8rem;
+  line-height: 1.6;
+  color: #94a3b8;
+  margin-bottom: 16px;
+}
+
+.panel-connections h4 {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #475569;
+  margin-bottom: 8px;
+}
+
+.connection-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.conn-tag {
+  font-size: 0.72rem;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid;
+  background: rgba(255,255,255,0.03);
+  color: #94a3b8;
+}
+
+/* ── Hint ────────────────────────────────────────────────────────────────────── */
+.hint {
+  position: absolute;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.68rem;
+  color: #334155;
+  letter-spacing: 0.06em;
+  pointer-events: none;
+  white-space: nowrap;
+}
