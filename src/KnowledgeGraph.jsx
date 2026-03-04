@@ -1,24 +1,31 @@
 import { useEffect, useRef } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
-import { nodes, edges, nodesMap } from './data.js'
+import { nodes, edges, hierarchyEdges, nodesMap, nodeHasCategory, categories } from './data.js'
+import { useKnowledgeStore } from './store.js'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const SPHERE_RADIUS = 12
 
 // Per-tier sphere radius, glow, and label offset
-const TIER_NODE_R = { 1: 0.52, 2: 0.32, 3: 0.18 }
+// Tier 0: Foundation (cross-category infrastructure) - largest, at center
+// Tier 1: Core frameworks - large
+// Tier 2: Tools - medium
+// Tier 3: Sub-libraries - small
+const TIER_NODE_R = { 0: 0.68, 1: 0.48, 2: 0.32, 3: 0.18 }
 const TIER_GLOW   = {
-  1: { idleScale: 3.2, selScale: 4.2, hoverScale: 5.2, baseOpacity: 0.72 },
-  2: { idleScale: 2.2, selScale: 2.8, hoverScale: 3.6, baseOpacity: 0.65 },
-  3: { idleScale: 1.5, selScale: 2.0, hoverScale: 2.5, baseOpacity: 0.55 },
+  0: { idleScale: 4.0, selScale: 5.2, hoverScale: 6.5, baseOpacity: 0.78 },
+  1: { idleScale: 3.0, selScale: 3.8, hoverScale: 4.8, baseOpacity: 0.70 },
+  2: { idleScale: 2.2, selScale: 2.8, hoverScale: 3.6, baseOpacity: 0.62 },
+  3: { idleScale: 1.5, selScale: 2.0, hoverScale: 2.5, baseOpacity: 0.52 },
 }
-const TIER_LABEL_OFFSET = { 1: 1.1, 2: 0.7, 3: 0.5 }
-// All tiers orbit OUTSIDE the ghost sphere; tier 1 closest, tier 3 furthest
+const TIER_LABEL_OFFSET = { 0: 1.3, 1: 1.0, 2: 0.7, 3: 0.5 }
+// Tier 0 is at center, Tier 1-3 orbit outside with tight category clustering
 const TIER_RADII = {
-  1: { min: 1.03, max: 1.18, spread: 0.38 },  // just outside sphere surface
-  2: { min: 1.22, max: 1.40, spread: 0.55 },  // mid ring
-  3: { min: 1.44, max: 1.62, spread: 0.65 },  // outer ring
+  0: { min: 0.35, max: 0.55, spread: 0.25 },  // center core (foundation)
+  1: { min: 1.08, max: 1.18, spread: 0.22 },  // tight cluster near sphere
+  2: { min: 1.28, max: 1.38, spread: 0.28 },  // tight cluster mid ring
+  3: { min: 1.48, max: 1.58, spread: 0.32 },  // tight cluster outer ring
 }
 
 // Minimap viewport dimensions (CSS pixels)
@@ -87,41 +94,251 @@ function makeLabelTexture(text) {
   return new THREE.CanvasTexture(canvas)
 }
 
+// ── Multi-category pie-slice glow texture (for foundation nodes) ──────────────
+function makeMultiCategoryGlowTexture(categoryIds, tier = 0) {
+  const size = 256
+  const canvas = document.createElement('canvas')
+  canvas.width = canvas.height = size
+  const ctx = canvas.getContext('2d')
+  const cx = size / 2, cy = size / 2, r = size / 2 - 4
+  
+  // Clear canvas
+  ctx.clearRect(0, 0, size, size)
+  
+  if (categoryIds.length === 1) {
+    // Single category - use simple glow
+    return makeGlowTexture(CAT_COLORS[categoryIds[0]])
+  }
+  
+  // Draw pie slices for each category
+  const sliceAngle = (2 * Math.PI) / categoryIds.length
+  categoryIds.forEach((catId, i) => {
+    const color = CAT_COLORS[catId]
+    const startAngle = i * sliceAngle - Math.PI / 2
+    const endAngle = (i + 1) * sliceAngle - Math.PI / 2
+    
+    // Create gradient for this slice
+    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r)
+    const rVal = Math.round(color.r * 255)
+    const gVal = Math.round(color.g * 255)
+    const bVal = Math.round(color.b * 255)
+    
+    grad.addColorStop(0, `rgba(${rVal},${gVal},${bVal},1)`)
+    grad.addColorStop(0.3, `rgba(${rVal},${gVal},${bVal},0.6)`)
+    grad.addColorStop(0.7, `rgba(${rVal},${gVal},${bVal},0.2)`)
+    grad.addColorStop(1, `rgba(${rVal},${gVal},${bVal},0)`)
+    
+    ctx.beginPath()
+    ctx.moveTo(cx, cy)
+    ctx.arc(cx, cy, r, startAngle, endAngle)
+    ctx.closePath()
+    ctx.fillStyle = grad
+    ctx.fill()
+  })
+  
+  // Add central white glow core
+  const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 0.4)
+  coreGrad.addColorStop(0, 'rgba(255,255,255,0.4)')
+  coreGrad.addColorStop(0.5, 'rgba(255,255,255,0.1)')
+  coreGrad.addColorStop(1, 'rgba(255,255,255,0)')
+  ctx.beginPath()
+  ctx.arc(cx, cy, r * 0.4, 0, 2 * Math.PI)
+  ctx.fillStyle = coreGrad
+  ctx.fill()
+  
+  return new THREE.CanvasTexture(canvas)
+}
+
 // ── Node positions (deterministic) ───────────────────────────────────────────
 function buildNodePositions() {
   const rng = seededRng(7)
   const positions = {}
+  
+  // First pass: position Tier 1-3 nodes with tight category clustering
+  // Group nodes by primary category for better clustering
+  const nodesByCategory = {}
   nodes.forEach(node => {
-    const center = CLUSTER_CENTERS[node.category]
-    const tr     = TIER_RADII[node.tier || 2]
-    const u = rng(), v = rng()
-    const theta = tr.spread * Math.sqrt(u)
-    const phi   = 2 * Math.PI * v
-    const ref = Math.abs(center.y) < 0.99
-      ? new THREE.Vector3(0, 1, 0)
-      : new THREE.Vector3(1, 0, 0)
-    const t1 = new THREE.Vector3().crossVectors(center, ref).normalize()
-    const t2 = new THREE.Vector3().crossVectors(center, t1).normalize()
-    const pos = new THREE.Vector3()
-    pos.addScaledVector(center, Math.cos(theta))
-    pos.addScaledVector(t1, Math.sin(theta) * Math.cos(phi))
-    pos.addScaledVector(t2, Math.sin(theta) * Math.sin(phi))
-    // Tier 1 inside ghost sphere, tier 2 current shell, tier 3 outer shell
-    pos.multiplyScalar(SPHERE_RADIUS * (tr.min + rng() * (tr.max - tr.min)))
-    positions[node.id] = pos
+    const tier = node.tier ?? 2
+    if (tier === 0) return // Skip Tier 0
+    
+    const primaryCat = node.categories?.[0] || 'backend'
+    if (!nodesByCategory[primaryCat]) nodesByCategory[primaryCat] = []
+    nodesByCategory[primaryCat].push(node)
   })
+  
+  // Position each category's nodes in a tight cluster
+  Object.entries(nodesByCategory).forEach(([catId, catNodes]) => {
+    const clusterCenter = CLUSTER_CENTERS[catId]
+    
+    // Sort by tier (1, 2, 3) for consistent layering
+    catNodes.sort((a, b) => (a.tier ?? 2) - (b.tier ?? 2))
+    
+    catNodes.forEach((node, index) => {
+      const tier = node.tier ?? 2
+      const tr = TIER_RADII[tier]
+      
+      // Use tier to determine radius layer (inner = higher tier)
+      // Add small jitter within tier range
+      const radiusFactor = tr.min + (rng() * 0.5 + 0.5) * (tr.max - tr.min)
+      const radius = SPHERE_RADIUS * radiusFactor
+      
+      // Tight angular clustering around category center
+      // Use smaller spread for tighter grouping
+      const tightSpread = tr.spread * 0.6
+      const u = rng(), v = rng()
+      const theta = tightSpread * Math.sqrt(u)
+      const phi = 2 * Math.PI * v
+      
+      // Build local coordinate system around cluster center
+      const ref = Math.abs(clusterCenter.y) < 0.99
+        ? new THREE.Vector3(0, 1, 0)
+        : new THREE.Vector3(1, 0, 0)
+      const t1 = new THREE.Vector3().crossVectors(clusterCenter, ref).normalize()
+      const t2 = new THREE.Vector3().crossVectors(clusterCenter, t1).normalize()
+      
+      // Calculate position with tight angular deviation from center
+      const pos = new THREE.Vector3()
+      pos.addScaledVector(clusterCenter, Math.cos(theta))
+      pos.addScaledVector(t1, Math.sin(theta) * Math.cos(phi))
+      pos.addScaledVector(t2, Math.sin(theta) * Math.sin(phi))
+      pos.multiplyScalar(radius)
+      
+      positions[node.id] = pos
+    })
+  })
+  
+  // Repulsion pass for Tier 1-3 nodes: push overlapping nodes apart
+  const tier13Nodes = nodes.filter(n => (n.tier ?? 2) > 0)
+  const TIER13_MIN_DISTANCE = SPHERE_RADIUS * 0.12 // Minimum distance between T1-T3 nodes
+  const TIER13_REPULSION_STRENGTH = 0.3
+  const TIER13_ITERATIONS = 25
+  
+  if (tier13Nodes.length > 0) {
+    for (let iter = 0; iter < TIER13_ITERATIONS; iter++) {
+      for (let i = 0; i < tier13Nodes.length; i++) {
+        for (let j = i + 1; j < tier13Nodes.length; j++) {
+          const node1 = tier13Nodes[i]
+          const node2 = tier13Nodes[j]
+          const p1 = positions[node1.id]
+          const p2 = positions[node2.id]
+          
+          if (!p1 || !p2) continue
+          
+          const diff = new THREE.Vector3().subVectors(p1, p2)
+          const dist = diff.length()
+          
+          if (dist < TIER13_MIN_DISTANCE && dist > 0.001) {
+            // Push apart
+            const force = (TIER13_MIN_DISTANCE - dist) * TIER13_REPULSION_STRENGTH
+            diff.normalize().multiplyScalar(force)
+            
+            p1.add(diff)
+            p2.sub(diff)
+            
+            // Maintain radial distance (keep on shell)
+            const tier1 = node1.tier ?? 2
+            const tier2 = node2.tier ?? 2
+            const avgRadius1 = SPHERE_RADIUS * (TIER_RADII[tier1].min + TIER_RADII[tier1].max) / 2
+            const avgRadius2 = SPHERE_RADIUS * (TIER_RADII[tier2].min + TIER_RADII[tier2].max) / 2
+            
+            p1.normalize().multiplyScalar(avgRadius1)
+            p2.normalize().multiplyScalar(avgRadius2)
+          }
+        }
+      }
+    }
+  }
+  
+  // Second pass: position Tier 0 (Foundation) nodes on inner sphere surface
+  // Create a smaller inner sphere where T0 nodes are distributed evenly
+  const tier0Nodes = nodes.filter(n => n.tier === 0)
+  const INNER_SPHERE_RADIUS = SPHERE_RADIUS * 0.45 // Inner sphere radius
+  const minDistance = SPHERE_RADIUS * 0.20 // Minimum distance between T0 nodes
+  
+  if (tier0Nodes.length > 0) {
+    // Calculate target position on inner sphere surface based on categories
+    const getTargetDirection = (node) => {
+      const cats = node.categories || ['backend']
+      const dir = new THREE.Vector3(0, 0, 0)
+      cats.forEach(catId => {
+        dir.add(CLUSTER_CENTERS[catId])
+      })
+      return dir.normalize()
+    }
+    
+    // Initialize positions: on inner sphere surface, biased toward category direction
+    const tier0Positions = tier0Nodes.map((node, i) => {
+      const targetDir = getTargetDirection(node)
+      
+      // Use seeded random for deterministic distribution
+      // Golden angle spiral for even distribution on sphere
+      const goldenAngle = Math.PI * (3 - Math.sqrt(5))
+      const y = 1 - (i / (tier0Nodes.length - 1)) * 2 // y goes from 1 to -1
+      const radiusAtY = Math.sqrt(1 - y * y)
+      const theta = goldenAngle * i
+      
+      const basePos = new THREE.Vector3(
+        radiusAtY * Math.cos(theta) * INNER_SPHERE_RADIUS,
+        y * INNER_SPHERE_RADIUS,
+        radiusAtY * Math.sin(theta) * INNER_SPHERE_RADIUS
+      )
+      
+      // Blend toward target direction (40% influence)
+      const blendFactor = 0.4
+      const blendedDir = new THREE.Vector3()
+        .addScaledVector(basePos.clone().normalize(), 1 - blendFactor)
+        .addScaledVector(targetDir, blendFactor)
+        .normalize()
+      
+      return blendedDir.multiplyScalar(INNER_SPHERE_RADIUS)
+    })
+    
+    // Repulsion iterations to ensure separation while staying on sphere surface
+    const iterations = 60
+    const repulsionStrength = 0.4
+    
+    for (let iter = 0; iter < iterations; iter++) {
+      for (let i = 0; i < tier0Positions.length; i++) {
+        for (let j = i + 1; j < tier0Positions.length; j++) {
+          const p1 = tier0Positions[i]
+          const p2 = tier0Positions[j]
+          const diff = new THREE.Vector3().subVectors(p1, p2)
+          const dist = diff.length()
+          
+          if (dist < minDistance && dist > 0.001) {
+            // Push apart
+            const force = (minDistance - dist) * repulsionStrength
+            diff.normalize().multiplyScalar(force)
+            
+            p1.add(diff)
+            p2.sub(diff)
+            
+            // Re-project to sphere surface
+            p1.normalize().multiplyScalar(INNER_SPHERE_RADIUS)
+            p2.normalize().multiplyScalar(INNER_SPHERE_RADIUS)
+          }
+        }
+      }
+    }
+    
+    // Assign final positions
+    tier0Nodes.forEach((node, i) => {
+      positions[node.id] = tier0Positions[i]
+    })
+  }
+  
   return positions
 }
 
 const NODE_POSITIONS = buildNodePositions()
 
-// Per-tier color variants: tier 1 = full brightness, tier 2 = 75%, tier 3 = 55%
-const TIER_LIGHTNESS = { 1: 1.0, 2: 0.75, 3: 0.55 }
-const TIER_CAT_COLORS    = { 1: {}, 2: {}, 3: {} }
-const TIER_GLOW_TEXTURES = { 1: {}, 2: {}, 3: {} }
+// Per-tier color variants: tier 0 = 1.0, tier 1 = 0.9, tier 2 = 0.7, tier 3 = 0.5
+const TIER_LIGHTNESS = { 0: 1.0, 1: 0.9, 2: 0.7, 3: 0.5 }
+const TIER_CAT_COLORS    = { 0: {}, 1: {}, 2: {}, 3: {} }
+const TIER_GLOW_TEXTURES = { 0: {}, 1: {}, 2: {}, 3: {} }
 for (const [cat, base] of Object.entries(CAT_COLORS)) {
   const hsl = {}; base.getHSL(hsl)
-  for (let t = 1; t <= 3; t++) {
+  for (let t = 0; t <= 3; t++) {
     const col = new THREE.Color().setHSL(hsl.h, hsl.s, hsl.l * TIER_LIGHTNESS[t])
     TIER_CAT_COLORS[t][cat]    = col
     TIER_GLOW_TEXTURES[t][cat] = makeGlowTexture(col)
@@ -133,16 +350,43 @@ const WHITE_GLOW_TEX  = makeGlowTexture(new THREE.Color(1, 1, 1))
 const CAM_GLOW_TEX    = makeGlowTexture(new THREE.Color(0x00ffd0))
 
 // ── Main component ────────────────────────────────────────────────────────────
-export function KnowledgeGraph({ activeCategories, onNodeSelect, statsRef, mmExpandedRef, mmFrameRef, orbitActiveRef }) {
+export function KnowledgeGraph() {
   const mountRef     = useRef(null)
   const objsRef      = useRef({})
   const linesRef     = useRef({})
   const hierLinesRef = useRef({})
   const hoveredRef   = useRef(null)
   const selectedRef  = useRef(null)
-  const onSelectRef  = useRef(onNodeSelect)
-
-  useEffect(() => { onSelectRef.current = onNodeSelect }, [onNodeSelect])
+  const debugObjectsRef = useRef({})
+  
+  // Zustand store
+  const activeCategories = useKnowledgeStore(state => state.activeCategories)
+  const setSelectedNode = useKnowledgeStore(state => state.setSelectedNode)
+  const statsRef = useKnowledgeStore(state => state.statsRef)
+  const mmExpandedRef = useKnowledgeStore(state => state.mmExpandedRef)
+  const mmFrameRef = useKnowledgeStore(state => state.mmFrameRef)
+  const orbitActiveRef = useKnowledgeStore(state => state.orbitActiveRef)
+  const setOrbitActive = useKnowledgeStore(state => state.setOrbitActive)
+  const hoveredNodeId = useKnowledgeStore(state => state.hoveredNodeId)
+  const cameraTargetNode = useKnowledgeStore(state => state.cameraTargetNode)
+  const setCameraTargetNode = useKnowledgeStore(state => state.setCameraTargetNode)
+  const showCategoryLabels = useKnowledgeStore(state => state.showCategoryLabels)
+  const showClusterCenters = useKnowledgeStore(state => state.showClusterCenters)
+  
+  // Keep refs in sync with store
+  const onSelectRef = useRef(setSelectedNode)
+  useEffect(() => { onSelectRef.current = setSelectedNode }, [setSelectedNode])
+  
+  // Camera animation refs
+  const cameraAnimRef = useRef({
+    isAnimating: false,
+    targetPos: new THREE.Vector3(),
+    startPos: new THREE.Vector3(),
+    startTime: 0,
+    duration: 1200,
+    edgeThreshold: 0.65,
+  })
+  const triggerCameraPanRef = useRef(null)
 
   // ── Sync category visibility ──────────────────────────────────────────────
   useEffect(() => {
@@ -150,8 +394,11 @@ export function KnowledgeGraph({ activeCategories, onNodeSelect, statsRef, mmExp
     const lines     = linesRef.current
     const hierLines = hierLinesRef.current
     if (!Object.keys(objs).length) return
+    
+    // Update node visibility
     nodes.forEach(n => {
-      const vis = activeCategories.has(n.category)
+      // Check if node belongs to any active category
+      const vis = n.categories?.some(cat => activeCategories.has(cat)) ?? false
       const o   = objs[n.id]
       if (!o) return
       o.mesh.visible  = vis
@@ -160,15 +407,130 @@ export function KnowledgeGraph({ activeCategories, onNodeSelect, statsRef, mmExp
       if (o.selGlow) o.selGlow.visible = vis
       o.secondaryGlows?.forEach(sg => { sg.visible = vis })
     })
+    
+    // Update line visibility
     const lineVis = line => {
       const { source, target } = line.userData
-      line.visible =
-        activeCategories.has(nodesMap[source]?.category) &&
-        activeCategories.has(nodesMap[target]?.category)
+      const srcNode = nodesMap[source]
+      const tgtNode = nodesMap[target]
+      const srcVis = srcNode?.categories?.some(cat => activeCategories.has(cat)) ?? false
+      const tgtVis = tgtNode?.categories?.some(cat => activeCategories.has(cat)) ?? false
+      line.visible = srcVis && tgtVis
     }
     Object.values(lines).forEach(lineVis)
     Object.values(hierLines).forEach(lineVis)
   }, [activeCategories])
+
+  // ── Sync debug visualization (cluster centers) ────────────────────────────
+  useEffect(() => {
+    const debugObjects = debugObjectsRef.current
+    if (!debugObjects || !Object.keys(debugObjects).length) return
+    
+    Object.keys(categories).forEach(catId => {
+      const isActive = activeCategories.has(catId)
+      
+      // Show/hide center sphere
+      const center = debugObjects.centers?.[catId]
+      if (center) {
+        center.visible = showClusterCenters && isActive
+      }
+      
+      // Show/hide label
+      const label = debugObjects.labels?.[catId]
+      if (label) {
+        label.visible = showCategoryLabels && isActive
+        label.material.opacity = showCategoryLabels && isActive ? 0.9 : 0
+      }
+      
+      // Show/hide connecting lines
+      const lines = debugObjects.lines?.[catId]
+      if (lines) {
+        lines.visible = showClusterCenters && isActive
+      }
+    })
+  }, [showCategoryLabels, showClusterCenters, activeCategories])
+
+  // ── Sync panel hover highlighting ─────────────────────────────────────────
+  useEffect(() => {
+    const objs = objsRef.current
+    const lines = linesRef.current
+    if (!Object.keys(objs).length) return
+    
+    // Clear previous hover effects if no hovered node
+    if (!hoveredNodeId) {
+      // Reset all nodes to normal (except selected)
+      nodes.forEach(n => {
+        const o = objs[n.id]
+        if (!o || selectedRef.current === n.id) return
+        const tg = o.tg
+        o.mesh.scale.setScalar(selectedRef.current === n.id ? 1.3 : 1)
+        o.glow.scale.setScalar(selectedRef.current === n.id ? tg.selScale : tg.idleScale)
+        o.mesh.material.opacity = 1
+        o.glow.material.opacity = tg.baseOpacity
+        o.label.material.opacity = 0
+      })
+      // Reset lines
+      Object.values(lines).forEach(line => {
+        line.material.color.set(0xffffff)
+        line.material.opacity = 0.11
+      })
+      return
+    }
+    
+    // Apply hover effect to panel-hovered node
+    const hoveredNode = nodes.find(n => n.id === hoveredNodeId)
+    if (!hoveredNode) return
+    
+    const o = objs[hoveredNodeId]
+    if (!o) return
+    
+    // Get connected nodes
+    const connected = new Set()
+    edges.forEach(e => {
+      if (e.source === hoveredNodeId) connected.add(e.target)
+      if (e.target === hoveredNodeId) connected.add(e.source)
+    })
+    
+    // Highlight hovered node
+    o.mesh.scale.setScalar(1.65)
+    o.glow.scale.setScalar(o.tg.hoverScale)
+    o.glow.material.opacity = 1
+    o.label.material.opacity = 1
+    
+    // Highlight connections
+    Object.values(lines).forEach(line => {
+      const { source, target } = line.userData
+      if (source === hoveredNodeId || target === hoveredNodeId) {
+        const catColor = CAT_COLORS[hoveredNode.categories?.[0]]
+        line.material.color.set(catColor)
+        line.material.opacity = 0.85
+      } else {
+        line.material.opacity = 0.04
+      }
+    })
+    
+    // Dim other nodes
+    nodes.forEach(n => {
+      if (n.id === hoveredNodeId || connected.has(n.id)) return
+      const nodeObj = objs[n.id]
+      if (!nodeObj || selectedRef.current === n.id) return
+      nodeObj.mesh.material.opacity = 0.22
+      nodeObj.glow.material.opacity = 0.15
+    })
+  }, [hoveredNodeId])
+
+  // ── Camera animation for panel tag clicks ────────────────────────────────
+  useEffect(() => {
+    if (!cameraTargetNode) return
+    
+    // Use ref to trigger camera pan (function is inside main useEffect)
+    if (triggerCameraPanRef.current) {
+      triggerCameraPanRef.current(cameraTargetNode.id)
+    }
+    
+    // Clear camera target after triggering
+    setCameraTargetNode(null)
+  }, [cameraTargetNode, setCameraTargetNode])
 
   // ── One-time scene setup ──────────────────────────────────────────────────
   useEffect(() => {
@@ -242,6 +604,92 @@ export function KnowledgeGraph({ activeCategories, onNodeSelect, statsRef, mmExp
     )
     scene.add(ghostSphere)
 
+    // ── Debug visualization (cluster centers) ──────────────────────────────
+    const debugObjects = { centers: {}, labels: {}, lines: {} }
+    
+    // Calculate actual cluster centers from Tier 1-3 node positions only (exclude Tier 0)
+    const computedCenters = {}
+    Object.keys(categories).forEach(catId => {
+      // Only include Tier 1, 2, 3 nodes (exclude Tier 0 Foundation nodes)
+      const catNodes = nodes.filter(n => {
+        const tier = n.tier ?? 2
+        return tier > 0 && n.categories?.includes(catId)
+      })
+      
+      if (catNodes.length === 0) {
+        // Fallback to cluster center direction if no Tier 1-3 nodes
+        computedCenters[catId] = CLUSTER_CENTERS[catId].clone().multiplyScalar(SPHERE_RADIUS)
+        return
+      }
+      
+      const center = new THREE.Vector3()
+      catNodes.forEach(n => {
+        center.add(NODE_POSITIONS[n.id])
+      })
+      center.divideScalar(catNodes.length)
+      computedCenters[catId] = center
+    })
+    
+    // Create debug visualizations for each category
+    Object.entries(categories).forEach(([catId, cat]) => {
+      const centerPos = computedCenters[catId]
+      const catColor = new THREE.Color(cat.color)
+      
+      // 1. Center point (small sphere)
+      const centerSphere = new THREE.Mesh(
+        new THREE.SphereGeometry(0.15, 16, 12),
+        new THREE.MeshBasicMaterial({ 
+          color: catColor, 
+          transparent: true, 
+          opacity: 0.8 
+        })
+      )
+      centerSphere.position.copy(centerPos)
+      centerSphere.visible = false
+      centerSphere.raycast = () => {} // Non-interactive
+      scene.add(centerSphere)
+      debugObjects.centers[catId] = centerSphere
+      
+      // 2. Label sprite
+      const labelTexture = makeLabelTexture(cat.name.toUpperCase())
+      const labelSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: labelTexture,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+      }))
+      labelSprite.position.copy(centerPos).add(new THREE.Vector3(0, 0.8, 0))
+      labelSprite.scale.set(3, 0.7, 1)
+      labelSprite.visible = false
+      labelSprite.raycast = () => {} // Non-interactive
+      scene.add(labelSprite)
+      debugObjects.labels[catId] = labelSprite
+      
+      // 3. Lines from center to each node in category
+      const lineGeo = new THREE.BufferGeometry()
+      const linePositions = []
+      const catNodes = nodes.filter(n => n.categories?.includes(catId))
+      catNodes.forEach(n => {
+        const nodePos = NODE_POSITIONS[n.id]
+        linePositions.push(centerPos.x, centerPos.y, centerPos.z)
+        linePositions.push(nodePos.x, nodePos.y, nodePos.z)
+      })
+      lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(linePositions, 3))
+      const lineMat = new THREE.LineBasicMaterial({ 
+        color: catColor, 
+        transparent: true, 
+        opacity: 0.3 
+      })
+      const lineMesh = new THREE.LineSegments(lineGeo, lineMat)
+      lineMesh.visible = false
+      lineMesh.raycast = () => {} // Non-interactive
+      scene.add(lineMesh)
+      debugObjects.lines[catId] = lineMesh
+    })
+    
+    // Store debug objects in ref for external access
+    debugObjectsRef.current = debugObjects
+
     // ── Camera indicator (visible only during minimap render) ──────────────
     // Arrow showing main camera position + look direction
     const camArrow = new THREE.ArrowHelper(
@@ -268,15 +716,28 @@ export function KnowledgeGraph({ activeCategories, onNodeSelect, statsRef, mmExp
 
     nodes.forEach(node => {
       const pos   = NODE_POSITIONS[node.id]
-      const tier  = node.tier || 2
-      const color = TIER_CAT_COLORS[tier][node.category]
+      const tier  = node.tier ?? 2
+      const cats  = node.categories || ['backend']
+      const primaryCat = cats[0]
       const tg    = TIER_GLOW[tier]
       const nodeR = TIER_NODE_R[tier]
+      
+      // For multi-category foundation nodes, blend the colors
+      let color
+      if (cats.length > 1 && tier === 0) {
+        // Use white-ish blended color for foundation nodes
+        color = new THREE.Color(0xffffff)
+        cats.forEach((cat, i) => {
+          color.lerp(CAT_COLORS[cat], 1 / (i + 1))
+        })
+      } else {
+        color = TIER_CAT_COLORS[tier][primaryCat]
+      }
 
       const mesh = new THREE.Mesh(
         new THREE.SphereGeometry(nodeR, 20, 20),
         new THREE.MeshStandardMaterial({
-          color, emissive: color, emissiveIntensity: 0.5,
+          color, emissive: color, emissiveIntensity: tier === 0 ? 0.6 : 0.5,
           roughness: 0.3, metalness: 0.4, transparent: true,
         })
       )
@@ -285,26 +746,35 @@ export function KnowledgeGraph({ activeCategories, onNodeSelect, statsRef, mmExp
       scene.add(mesh)
       meshList.push(mesh)
 
+      // Glow texture: Tier 0 uses unified white glow, others use category color
+      const glowTexture = (tier === 0)
+        ? WHITE_GLOW_TEX
+        : TIER_GLOW_TEXTURES[tier][primaryCat]
+      
+      const glowOpacity = (tier === 0) ? 0.55 : tg.baseOpacity
+      
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: TIER_GLOW_TEXTURES[tier][node.category],
-        blending: THREE.AdditiveBlending, transparent: true, opacity: tg.baseOpacity, depthWrite: false,
+        map: glowTexture,
+        blending: THREE.AdditiveBlending, transparent: true, opacity: glowOpacity, depthWrite: false,
       }))
       glow.position.copy(pos)
       glow.scale.set(tg.idleScale, tg.idleScale, 1)
       scene.add(glow)
 
-      // Secondary category glow rings (cross-category nodes only)
+      // Secondary glow rings for additional categories (for tier 1+ nodes)
       const secondaryGlows = []
-      node.secondaryCategories?.forEach(secCat => {
-        const sg = new THREE.Sprite(new THREE.SpriteMaterial({
-          map: GLOW_TEXTURES[secCat],
-          blending: THREE.AdditiveBlending, transparent: true, opacity: 0.28, depthWrite: false,
-        }))
-        sg.position.copy(pos)
-        sg.scale.set(tg.idleScale * 1.55, tg.idleScale * 1.55, 1)
-        scene.add(sg)
-        secondaryGlows.push(sg)
-      })
+      if (tier > 0 && cats.length > 1) {
+        cats.slice(1).forEach(secCat => {
+          const sg = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: TIER_GLOW_TEXTURES[tier][secCat],
+            blending: THREE.AdditiveBlending, transparent: true, opacity: 0.25, depthWrite: false,
+          }))
+          sg.position.copy(pos)
+          sg.scale.set(tg.idleScale * 1.45, tg.idleScale * 1.45, 1)
+          scene.add(sg)
+          secondaryGlows.push(sg)
+        })
+      }
 
       const labelOffset = TIER_LABEL_OFFSET[tier]
       const label = new THREE.Sprite(new THREE.SpriteMaterial({
@@ -452,7 +922,152 @@ export function KnowledgeGraph({ activeCategories, onNodeSelect, statsRef, mmExp
       objs[nodeId].mesh.scale.setScalar(1.3)
       objs[nodeId].glow.scale.setScalar(tg.selScale)
       onSelectRef.current(nodesMap[nodeId] || null)
+      
+      // ── Camera pan animation when node is near screen edge ───────────────
+      triggerCameraPanIfNeeded(nodeId)
     }
+    
+    // Check if node is near screen edge and trigger smooth camera pan
+    function triggerCameraPanIfNeeded(nodeId) {
+      const nodePos = NODE_POSITIONS[nodeId]
+      if (!nodePos) return
+      
+      // Project node position to screen space (NDC)
+      const projected = nodePos.clone().project(camera)
+      
+      // Check if node is near any edge of the screen
+      const threshold = cameraAnimRef.current.edgeThreshold
+      const isNearEdge = 
+        Math.abs(projected.x) > threshold || 
+        Math.abs(projected.y) > threshold * 0.8 // slightly more sensitive for top/bottom
+      
+      if (!isNearEdge) return
+      
+      // Calculate how far the node is from center in screen space
+      const offsetX = projected.x // -0 to +1 range in NDC
+      const offsetY = projected.y
+      
+      // Get camera's right and up vectors in world space
+      const cameraDir = new THREE.Vector3()
+      camera.getWorldDirection(cameraDir)
+      const cameraRight = new THREE.Vector3().crossVectors(camera.up, cameraDir).normalize()
+      const cameraUp = camera.up.clone()
+      
+      // Calculate camera movement to center the node
+      // If node is at +0.7 (right side), we need to move camera right
+      // Target is to bring node to x = -0.2 (slight left of center, accounting for panel)
+      const targetScreenX = -0.15
+      const targetScreenY = 0
+      
+      const deltaScreenX = offsetX - targetScreenX
+      const deltaScreenY = offsetY - targetScreenY
+      
+      // Convert screen offset to world space movement
+      // Approximate: at distance d, screen width ~ 2*d*tan(fov/2)
+      const dist = camera.position.distanceTo(nodePos)
+      const fovRad = (camera.fov * Math.PI) / 180
+      const screenWidthAtDist = 2 * dist * Math.tan(fovRad / 2)
+      const screenHeightAtDist = screenWidthAtDist / camera.aspect
+      
+      // Movement needed in world space
+      const moveRight = cameraRight.multiplyScalar(-deltaScreenX * screenWidthAtDist * 0.5)
+      const moveUp = cameraUp.multiplyScalar(-deltaScreenY * screenHeightAtDist * 0.5)
+      
+      // Target camera position
+      const targetPos = camera.position.clone().add(moveRight).add(moveUp)
+      
+      // Ensure minimum height and comfortable distance
+      const minHeight = nodePos.y + 8
+      if (targetPos.y < minHeight) targetPos.y = minHeight
+      
+      // Maintain distance if too close
+      const finalDist = targetPos.distanceTo(nodePos)
+      if (finalDist < 22) {
+        const dirFromNode = targetPos.clone().sub(nodePos).normalize()
+        targetPos.copy(nodePos).add(dirFromNode.multiplyScalar(22))
+      }
+      
+      // Start camera animation
+      cameraAnimRef.current.isAnimating = true
+      cameraAnimRef.current.startPos.copy(camera.position)
+      cameraAnimRef.current.targetPos.copy(targetPos)
+      cameraAnimRef.current.startTime = performance.now()
+      
+      // Disable controls during animation
+      controls.enabled = false
+    }
+    
+    // Smooth easing function (ease-in-out-cubic)
+    function easeInOutCubic(t) {
+      return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
+    }
+    
+    // Trigger camera pan to specific node (for panel tag clicks)
+    function triggerCameraPan(nodeId) {
+      const nodePos = NODE_POSITIONS[nodeId]
+      if (!nodePos) return
+      
+      // Safety check: ensure camera position is valid
+      if (!camera.position || camera.position.length() === 0) return
+      
+      // Fixed camera distance constraints
+      const MIN_CAMERA_DIST = 22  // Minimum comfortable viewing distance
+      const MAX_CAMERA_DIST = 32  // Maximum allowed viewing distance
+      const DEFAULT_DIST = 28     // Default preferred distance
+      
+      // Calculate current distance to node
+      const currentDist = camera.position.distanceTo(nodePos)
+      
+      // If camera is too close to node, use a default offset direction
+      let viewDir
+      if (currentDist < 0.1) {
+        viewDir = new THREE.Vector3(0, 0, 1) // Default: view from +Z
+      } else {
+        viewDir = camera.position.clone().sub(nodePos).normalize()
+      }
+      
+      // Clamp target distance to fixed range (prevents drifting)
+      // Use current direction but enforce distance limits
+      let targetDist = DEFAULT_DIST
+      if (currentDist >= MIN_CAMERA_DIST && currentDist <= MAX_CAMERA_DIST) {
+        // Current distance is acceptable, keep it
+        targetDist = currentDist
+      } else if (currentDist < MIN_CAMERA_DIST) {
+        // Too close, push back
+        targetDist = MIN_CAMERA_DIST
+      } else {
+        // Too far, pull in
+        targetDist = MAX_CAMERA_DIST
+      }
+      
+      // Target position: view direction at controlled distance
+      // with slight offset to account for left panel
+      const idealOffset = new THREE.Vector3(6, 0, 0)
+      const targetPos = nodePos.clone()
+        .add(viewDir.clone().multiplyScalar(targetDist))
+        .add(idealOffset)
+      
+      // Ensure minimum height
+      targetPos.y = Math.max(targetPos.y, nodePos.y + 6)
+      
+      // Safety check: ensure target position is valid
+      if (!isFinite(targetPos.x) || !isFinite(targetPos.y) || !isFinite(targetPos.z)) {
+        console.warn('Invalid camera target position, aborting pan')
+        return
+      }
+      
+      // Start camera animation
+      cameraAnimRef.current.isAnimating = true
+      cameraAnimRef.current.startPos.copy(camera.position)
+      cameraAnimRef.current.targetPos.copy(targetPos)
+      cameraAnimRef.current.startTime = performance.now()
+      
+      // Disable controls during animation
+      controls.enabled = false
+    }
+    
+    // Expose triggerCameraPan via ref for external access
+    triggerCameraPanRef.current = triggerCameraPan
 
     // ── Minimap region check ──────────────────────────────────────────────
     function isInMinimap(clientX, clientY) {
@@ -536,9 +1151,9 @@ export function KnowledgeGraph({ activeCategories, onNodeSelect, statsRef, mmExp
 
     // ── Cinematic close-orbit state ───────────────────────────────────────
     const CLOSE_ORBIT_SPEED  = 0.08   // rad/s  →  full revolution ≈ 79 s
-    const CLOSE_ORBIT_R_INIT = 3.2    // initial distance from node (units)
-    const CLOSE_ORBIT_R_MIN  = 1.4
-    const CLOSE_ORBIT_R_MAX  = 8.0
+    const CLOSE_ORBIT_R_INIT = 5.5    // initial distance from node (units)
+    const CLOSE_ORBIT_R_MIN  = 2.5
+    const CLOSE_ORBIT_R_MAX  = 10.0
     let closeOrbitR     = CLOSE_ORBIT_R_INIT
     let closeOrbitTheta = 0
     let closeOrbitPhi   = Math.PI / 2
@@ -658,7 +1273,38 @@ export function KnowledgeGraph({ activeCategories, onNodeSelect, statsRef, mmExp
           controls.target.set(0, 0, 0)
           closeOrbitR = CLOSE_ORBIT_R_INIT
         }
-        controls.update()
+        
+        // ── Handle camera pan animation when selecting edge nodes ───────────
+        if (cameraAnimRef.current.isAnimating) {
+          const anim = cameraAnimRef.current
+          const elapsed = performance.now() - anim.startTime
+          const progress = Math.min(elapsed / anim.duration, 1)
+          const eased = easeInOutCubic(progress)
+          
+          // Interpolate camera position
+          camera.position.lerpVectors(anim.startPos, anim.targetPos, eased)
+          
+          // Continue looking at the selected node
+          const selId = selectedRef.current
+          if (selId && NODE_POSITIONS[selId]) {
+            const target = NODE_POSITIONS[selId]
+            camera.lookAt(target.x, target.y, target.z)
+          }
+          
+          // Animation complete
+          if (progress >= 1) {
+            anim.isAnimating = false
+            controls.enabled = true
+            // Update controls target to maintain relative orientation
+            const selId = selectedRef.current
+            if (selId && NODE_POSITIONS[selId]) {
+              const target = NODE_POSITIONS[selId]
+              controls.target.set(target.x, target.y, target.z)
+            }
+          }
+        } else {
+          controls.update()
+        }
       }
       prevOrbitActive = isOrbiting && !!hasTarget
       mmControls.update()
