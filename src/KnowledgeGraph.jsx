@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js'
 import { nodes, edges, hierarchyEdges, nodesMap, nodeHasCategory, categories } from './data.js'
 import { useKnowledgeStore } from './store.js'
 
@@ -28,6 +29,35 @@ const TIER_RADII = {
   3: { min: 1.48, max: 1.58, spread: 0.32 },  // tight cluster outer ring
 }
 
+// Satellite orbit parameters for tier-0 subtype='satellite' nodes
+const SATELLITE_PARAMS = {
+  aws:    { radius: 20, speed: 0.045, inclination: 0, phase: 0 },
+  docker: { radius: 16, speed: 0.065, inclination: 0, phase: Math.PI * 0.6 },
+}
+
+// Pure helper: position on inclined circular orbit at angular time t
+function getSatellitePos(params, t) {
+  const θ   = t * params.speed + params.phase
+  const r   = params.radius
+  const yz  = r * Math.sin(θ)
+  return new THREE.Vector3(
+    r * Math.cos(θ),
+    -yz * Math.sin(params.inclination),
+     yz * Math.cos(params.inclination)
+  )
+}
+
+// Same but with explicit angle (for orbit ring tracing)
+function getSatellitePosAtAngle(params, θ) {
+  const r  = params.radius
+  const yz = r * Math.sin(θ)
+  return new THREE.Vector3(
+    r * Math.cos(θ),
+    -yz * Math.sin(params.inclination),
+     yz * Math.cos(params.inclination)
+  )
+}
+
 // Minimap viewport dimensions (CSS pixels)
 export const MM_W      = 190
 export const MM_H      = 190
@@ -39,14 +69,18 @@ const CAT_COLORS = {
   devops:   new THREE.Color(0xfb923c),
   aiml:     new THREE.Color(0xf472b6),
   depipe:   new THREE.Color(0xfbbf24),
+  database: new THREE.Color(0x10b981),
 }
+// Neutral color for tier-0 language nodes that belong to no category
+const NEUTRAL_COLOR = new THREE.Color(0xd1d5db)
 
 const CLUSTER_CENTERS = {
   frontend: new THREE.Vector3( 1,  0.7,  0.5).normalize(),
   backend:  new THREE.Vector3(-1,  0.7, -0.5).normalize(),
   devops:   new THREE.Vector3( 0.5, -0.7, -1).normalize(),
   aiml:     new THREE.Vector3(-0.5, -0.7,  1).normalize(),
-  depipe:   new THREE.Vector3( 0, 0.9, -0.3).normalize(),
+  depipe:   new THREE.Vector3( 0,   0.9, -0.3).normalize(),
+  database: new THREE.Vector3( 1,  -0.6,  0.6).normalize(),
 }
 
 // ── Seeded RNG ────────────────────────────────────────────────────────────────
@@ -93,6 +127,52 @@ function makeLabelTexture(text) {
   ctx.fillText(text, W / 2, H / 2)
   return new THREE.CanvasTexture(canvas)
 }
+
+// ── AWS logo canvas texture ───────────────────────────────────────────────────
+function makeAwsLogoTexture() {
+  const S = 256
+  const canvas = document.createElement('canvas')
+  canvas.width = canvas.height = S
+  const ctx = canvas.getContext('2d')
+
+  // Background
+  ctx.fillStyle = '#1a1a2e'
+  ctx.fillRect(0, 0, S, S)
+
+  // "aws" wordmark in white
+  ctx.font = 'bold 72px Arial Black, Arial, sans-serif'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillStyle = '#ffffff'
+  ctx.fillText('aws', S / 2, S / 2 - 18)
+
+  // Amazon smile arc (orange) — centered below text
+  const cx = S / 2, cy = S / 2 + 36
+  const arcR = 72
+  ctx.beginPath()
+  ctx.arc(cx, cy, arcR, Math.PI * 0.15, Math.PI * 0.85)
+  ctx.strokeStyle = '#FF9900'
+  ctx.lineWidth = 9
+  ctx.lineCap = 'round'
+  ctx.stroke()
+
+  // Arrow tip at end of arc
+  const tipAngle = Math.PI * 0.85
+  const tx = cx + arcR * Math.cos(tipAngle)
+  const ty = cy + arcR * Math.sin(tipAngle)
+  ctx.beginPath()
+  ctx.moveTo(tx - 10, ty - 10)
+  ctx.lineTo(tx + 4,  ty - 2)
+  ctx.lineTo(tx - 6,  ty + 8)
+  ctx.strokeStyle = '#FF9900'
+  ctx.lineWidth = 6
+  ctx.lineCap = 'round'
+  ctx.lineJoin = 'round'
+  ctx.stroke()
+
+  return new THREE.CanvasTexture(canvas)
+}
+const AWS_LOGO_TEX = makeAwsLogoTexture()
 
 // ── Multi-category pie-slice glow texture (for foundation nodes) ──────────────
 function makeMultiCategoryGlowTexture(categoryIds, tier = 0) {
@@ -323,6 +403,10 @@ function buildNodePositions() {
     
     // Assign final positions
     tier0Nodes.forEach((node, i) => {
+      if (node.subtype === 'satellite') {
+        const params = SATELLITE_PARAMS[node.id]
+        if (params) { positions[node.id] = getSatellitePos(params, 0); return }
+      }
       positions[node.id] = tier0Positions[i]
     })
   }
@@ -351,13 +435,15 @@ const CAM_GLOW_TEX    = makeGlowTexture(new THREE.Color(0x00ffd0))
 
 // ── Main component ────────────────────────────────────────────────────────────
 export function KnowledgeGraph() {
-  const mountRef     = useRef(null)
-  const objsRef      = useRef({})
-  const linesRef     = useRef({})
-  const hierLinesRef = useRef({})
-  const hoveredRef   = useRef(null)
-  const selectedRef  = useRef(null)
-  const debugObjectsRef = useRef({})
+  const mountRef          = useRef(null)
+  const objsRef           = useRef({})
+  const linesRef          = useRef({})
+  const hierLinesRef      = useRef({})
+  const satelliteEdgesRef = useRef([])
+  const hullsRef          = useRef({})
+  const hoveredRef        = useRef(null)
+  const selectedRef       = useRef(null)
+  const debugObjectsRef   = useRef({})
   
   // Zustand store
   const activeCategories = useKnowledgeStore(state => state.activeCategories)
@@ -367,6 +453,8 @@ export function KnowledgeGraph() {
   const mmFrameRef = useKnowledgeStore(state => state.mmFrameRef)
   const orbitActiveRef = useKnowledgeStore(state => state.orbitActiveRef)
   const setOrbitActive = useKnowledgeStore(state => state.setOrbitActive)
+  const lockViewRef         = useKnowledgeStore(state => state.lockViewRef)
+  const showNodeLabelsRef   = useKnowledgeStore(state => state.showNodeLabelsRef)
   const hoveredNodeId = useKnowledgeStore(state => state.hoveredNodeId)
   const cameraTargetNode = useKnowledgeStore(state => state.cameraTargetNode)
   const setCameraTargetNode = useKnowledgeStore(state => state.setCameraTargetNode)
@@ -380,6 +468,7 @@ export function KnowledgeGraph() {
   // Camera animation refs
   const cameraAnimRef = useRef({
     isAnimating: false,
+    isReturn: false,
     targetPos: new THREE.Vector3(),
     startPos: new THREE.Vector3(),
     startTime: 0,
@@ -395,10 +484,12 @@ export function KnowledgeGraph() {
     const hierLines = hierLinesRef.current
     if (!Object.keys(objs).length) return
     
+    // Nodes with no categories are always visible (cross-cutting foundation nodes)
+    const nodeIsVisible = n => !n.categories?.length || n.categories.some(cat => activeCategories.has(cat))
+
     // Update node visibility
     nodes.forEach(n => {
-      // Check if node belongs to any active category
-      const vis = n.categories?.some(cat => activeCategories.has(cat)) ?? false
+      const vis = nodeIsVisible(n)
       const o   = objs[n.id]
       if (!o) return
       o.mesh.visible  = vis
@@ -407,18 +498,23 @@ export function KnowledgeGraph() {
       if (o.selGlow) o.selGlow.visible = vis
       o.secondaryGlows?.forEach(sg => { sg.visible = vis })
     })
-    
+
     // Update line visibility
     const lineVis = line => {
       const { source, target } = line.userData
       const srcNode = nodesMap[source]
       const tgtNode = nodesMap[target]
-      const srcVis = srcNode?.categories?.some(cat => activeCategories.has(cat)) ?? false
-      const tgtVis = tgtNode?.categories?.some(cat => activeCategories.has(cat)) ?? false
-      line.visible = srcVis && tgtVis
+      line.visible = nodeIsVisible(srcNode) && nodeIsVisible(tgtNode)
     }
     Object.values(lines).forEach(lineVis)
     Object.values(hierLines).forEach(lineVis)
+
+    // Update convex hull visibility
+    Object.entries(hullsRef.current).forEach(([catId, { fill, edges }]) => {
+      const vis = activeCategories.has(catId)
+      fill.visible  = vis
+      edges.visible = vis
+    })
   }, [activeCategories])
 
   // ── Sync debug visualization (cluster centers) ────────────────────────────
@@ -604,6 +700,14 @@ export function KnowledgeGraph() {
     )
     scene.add(ghostSphere)
 
+    // ── Equatorial ring ───────────────────────────────────────────────────
+    const equatorRing = new THREE.Mesh(
+      new THREE.TorusGeometry(SPHERE_RADIUS, 0.045, 8, 160),
+      new THREE.MeshBasicMaterial({ color: 0x4facfe, transparent: true, opacity: 0.45, depthWrite: false })
+    )
+    equatorRing.rotation.x = Math.PI / 2
+    scene.add(equatorRing)
+
     // ── Debug visualization (cluster centers) ──────────────────────────────
     const debugObjects = { centers: {}, labels: {}, lines: {} }
     
@@ -717,21 +821,25 @@ export function KnowledgeGraph() {
     nodes.forEach(node => {
       const pos   = NODE_POSITIONS[node.id]
       const tier  = node.tier ?? 2
-      const cats  = node.categories || ['backend']
+      const cats  = node.categories?.length ? node.categories : []
       const primaryCat = cats[0]
       const tg    = TIER_GLOW[tier]
       const nodeR = TIER_NODE_R[tier]
-      
-      // For multi-category foundation nodes, blend the colors
+
+      // Color: neutral for T0, single-cat for single-category, equal blend for multi-category
       let color
-      if (cats.length > 1 && tier === 0) {
-        // Use white-ish blended color for foundation nodes
-        color = new THREE.Color(0xffffff)
-        cats.forEach((cat, i) => {
-          color.lerp(CAT_COLORS[cat], 1 / (i + 1))
-        })
-      } else {
+      if (!cats.length) {
+        color = NEUTRAL_COLOR
+      } else if (cats.length === 1) {
         color = TIER_CAT_COLORS[tier][primaryCat]
+      } else {
+        // Equal-weight average of all category colors for this tier
+        color = new THREE.Color(0, 0, 0)
+        cats.forEach(cat => {
+          const c = TIER_CAT_COLORS[tier][cat]
+          if (c) { color.r += c.r; color.g += c.g; color.b += c.b }
+        })
+        color.multiplyScalar(1 / cats.length)
       }
 
       const mesh = new THREE.Mesh(
@@ -743,15 +851,27 @@ export function KnowledgeGraph() {
       )
       mesh.position.copy(pos)
       mesh.userData.nodeId = node.id
+
+      // AWS logo texture on the sphere
+      if (node.id === 'aws') {
+        mesh.material.map = AWS_LOGO_TEX
+        mesh.material.color.set(0xffffff)
+        mesh.material.emissive.set(0xFF9900)
+        mesh.material.emissiveIntensity = 0.3
+        mesh.material.needsUpdate = true
+      }
+
       scene.add(mesh)
       meshList.push(mesh)
 
-      // Glow texture: Tier 0 uses unified white glow, others use category color
-      const glowTexture = (tier === 0)
+      // Glow texture: uncategorized → white, multi-cat → pie-slice blend, single-cat → standard
+      const glowTexture = !cats.length
         ? WHITE_GLOW_TEX
-        : TIER_GLOW_TEXTURES[tier][primaryCat]
-      
-      const glowOpacity = (tier === 0) ? 0.55 : tg.baseOpacity
+        : cats.length > 1
+          ? makeMultiCategoryGlowTexture(cats, tier)
+          : TIER_GLOW_TEXTURES[tier][primaryCat]
+
+      const glowOpacity = !cats.length ? 0.55 : tg.baseOpacity
       
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({
         map: glowTexture,
@@ -789,6 +909,22 @@ export function KnowledgeGraph() {
 
     objsRef.current  = objs
     linesRef.current = lines
+
+    // ── Satellite orbit rings ─────────────────────────────────────────────
+    nodes.filter(n => n.subtype === 'satellite').forEach(node => {
+      const params = SATELLITE_PARAMS[node.id]
+      if (!params) return
+      const pts = []
+      for (let i = 0; i <= 128; i++) {
+        pts.push(getSatellitePosAtAngle(params, (i / 128) * Math.PI * 2))
+      }
+      const catColor = CAT_COLORS[node.categories?.[0]] ?? new THREE.Color(0xffffff)
+      const ring = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(pts),
+        new THREE.LineBasicMaterial({ color: catColor, transparent: true, opacity: 0.18, depthWrite: false })
+      )
+      scene.add(ring)
+    })
 
     // ── Semantic edge lines ───────────────────────────────────────────────
     edges.filter(e => !e.type).forEach(edge => {
@@ -831,6 +967,57 @@ export function KnowledgeGraph() {
       hierLines[`h-${edge.source}-${edge.target}`] = line
     })
     hierLinesRef.current = hierLines
+
+    // ── Track edges connected to satellite nodes ───────────────────────────
+    const satelliteIds = new Set(nodes.filter(n => n.subtype === 'satellite').map(n => n.id))
+    const satEdges = []
+    const checkLine = (line) => {
+      const { source, target } = line.userData
+      const srcSat = satelliteIds.has(source)
+      const tgtSat = satelliteIds.has(target)
+      if (!srcSat && !tgtSat) return
+      satEdges.push({ line, satIndex: srcSat ? 0 : 1, satId: srcSat ? source : target })
+    }
+    Object.values(linesRef.current).forEach(checkLine)
+    Object.values(hierLinesRef.current).forEach(checkLine)
+    satelliteEdgesRef.current = satEdges
+
+    // ── Category convex hulls ─────────────────────────────────────────────
+    const HULL_SHRINK = 1.20   // expand each vertex this fraction away from centroid
+    const hulls = {}
+    Object.entries(categories).forEach(([catId, cat]) => {
+      // Only tier 1-3 nodes that belong to this category
+      const catNodes = nodes.filter(n => (n.tier ?? 2) > 0 && n.categories?.includes(catId))
+      if (catNodes.length < 4) return
+
+      const pts = catNodes.map(n => NODE_POSITIONS[n.id].clone())
+      const centroid = new THREE.Vector3()
+      pts.forEach(p => centroid.add(p))
+      centroid.divideScalar(pts.length)
+      const shrunkPts = pts.map(p => new THREE.Vector3().lerpVectors(centroid, p, HULL_SHRINK))
+
+      try {
+        const catColor = new THREE.Color(cat.color)
+        const geo = new ConvexGeometry(shrunkPts)
+
+        const fill = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+          color: catColor, transparent: true, opacity: 0.04,
+          side: THREE.DoubleSide, depthWrite: false,
+        }))
+        scene.add(fill)
+
+        const edges = new THREE.LineSegments(
+          new THREE.EdgesGeometry(geo),
+          new THREE.LineBasicMaterial({ color: catColor, transparent: true, opacity: 0.30, depthWrite: false })
+        )
+        scene.add(edges)
+
+        hulls[catId] = { fill, edges }
+      } catch (e) {
+        console.warn(`Convex hull skipped for ${catId}:`, e)
+      }
+    })
+    hullsRef.current = hulls
 
     // ── Interaction helpers ───────────────────────────────────────────────
     function getConnected(nodeId) {
@@ -1158,6 +1345,7 @@ export function KnowledgeGraph() {
     let closeOrbitTheta = 0
     let closeOrbitPhi   = Math.PI / 2
     let prevOrbitActive = false
+    let prevLockView    = false
     const _orbitPos = new THREE.Vector3()
 
     // Scroll wheel adjusts orbit radius when cockpit mode is active
@@ -1220,9 +1408,37 @@ export function KnowledgeGraph() {
           const ss = tg.idleScale * 1.55 + Math.sin(t * 0.85 + i * 0.9 + 1.6) * (tg.idleScale * 0.09)
           o.secondaryGlows.forEach(sg => sg.scale.set(ss, ss, 1))
         }
-        const targetOp = isHov ? 1 : 0
+        const alwaysLabel = showNodeLabelsRef?.current && (node.tier ?? 2) <= 2
+        const targetOp = (isHov || alwaysLabel) ? 1 : 0
         o.label.material.opacity += (targetOp - o.label.material.opacity) * 0.12
       })
+
+      // ── Satellite orbital positions ──────────────────────────────────────
+      nodes.forEach(node => {
+        if (node.subtype !== 'satellite') return
+        const params = SATELLITE_PARAMS[node.id]
+        if (!params) return
+        const o = objs[node.id]
+        if (!o) return
+
+        const pos = getSatellitePos(params, t)
+
+        o.mesh.position.copy(pos)
+        o.glow.position.copy(pos)
+        o.secondaryGlows?.forEach(sg => sg.position.copy(pos))
+        if (o.selGlow) o.selGlow.position.copy(pos)
+        o.label.position.set(pos.x, pos.y + TIER_NODE_R[0] + TIER_LABEL_OFFSET[0], pos.z)
+      })
+
+      // ── Update edges connected to satellites ─────────────────────────────
+      satelliteEdgesRef.current.forEach(({ line, satIndex, satId }) => {
+        const satMesh = objsRef.current[satId]?.mesh
+        if (!satMesh) return
+        const pa = line.geometry.attributes.position
+        pa.setXYZ(satIndex, satMesh.position.x, satMesh.position.y, satMesh.position.z)
+        pa.needsUpdate = true
+      })
+
       ghostSphere.rotation.y = t * 0.04
 
       // ── Cinematic orbit (takes over main camera when active) ──
