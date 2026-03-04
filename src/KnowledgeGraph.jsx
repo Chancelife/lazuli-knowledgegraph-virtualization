@@ -1518,27 +1518,81 @@ export function KnowledgeGraph() {
           
           // Interpolate camera position
           camera.position.lerpVectors(anim.startPos, anim.targetPos, eased)
-          
-          // Continue looking at the selected node
-          const selId = selectedRef.current
-          if (selId && NODE_POSITIONS[selId]) {
-            const target = NODE_POSITIONS[selId]
-            camera.lookAt(target.x, target.y, target.z)
-          }
-          
-          // Animation complete
-          if (progress >= 1) {
-            anim.isAnimating = false
-            controls.enabled = true
-            // Update controls target to maintain relative orientation
+
+          if (anim.isReturn) {
+            // Return-to-equatorial: always look at scene center
+            camera.lookAt(0, 0, 0)
+          } else {
+            // Continue looking at the selected node
             const selId = selectedRef.current
             if (selId && NODE_POSITIONS[selId]) {
               const target = NODE_POSITIONS[selId]
-              controls.target.set(target.x, target.y, target.z)
+              camera.lookAt(target.x, target.y, target.z)
+            }
+          }
+
+          // Animation complete
+          if (progress >= 1) {
+            anim.isAnimating = false
+            if (anim.isReturn) {
+              // Controls were never disabled — just reset target to scene center
+              controls.target.set(0, 0, 0)
+              anim.isReturn = false
+            } else {
+              // Forward animation disabled controls — re-enable now
+              controls.enabled = true
+              const selId = selectedRef.current
+              if (selId && NODE_POSITIONS[selId]) {
+                const target = NODE_POSITIONS[selId]
+                controls.target.set(target.x, target.y, target.z)
+              }
             }
           }
         } else {
+          // Safety: ensure controls are never left disabled outside orbit/animation
+          controls.enabled = true
+
+          const LOCK_POLAR = Math.PI / 2 - Math.PI * 25 / 180
+          if (lockViewRef?.current) {
+            controls.enablePan = false
+            if (!prevLockView) {
+              // First frame entering lock mode: reset target + snap elevation
+              controls.target.set(0, 0, 0)
+              const r = camera.position.length()
+              const az = Math.atan2(camera.position.x, camera.position.z)
+              camera.position.set(
+                r * Math.sin(LOCK_POLAR) * Math.sin(az),
+                r * Math.cos(LOCK_POLAR),
+                r * Math.sin(LOCK_POLAR) * Math.cos(az)
+              )
+            }
+          } else {
+            if (prevLockView) {
+              // Leaving lock mode: restore full polar range
+              controls.minPolarAngle = 0
+              controls.maxPolarAngle = Math.PI
+              controls.enablePan = true
+            }
+          }
+          prevLockView = lockViewRef?.current ?? false
           controls.update()
+
+          // ── Post-update elevation enforcement ────────────────────────────
+          // Setting min===max polar every frame causes OrbitControls' phi-damping
+          // to fight the constraint and fire change events continuously (2ms→10ms).
+          // Instead: let controls.update() run freely, then snap elevation afterwards.
+          // OrbitControls re-reads camera.position at the top of the next update(),
+          // so azimuth + zoom work normally; only vertical tilt is silently corrected.
+          if (lockViewRef?.current) {
+            const r  = camera.position.length()
+            const az = Math.atan2(camera.position.x, camera.position.z)
+            camera.position.set(
+              r * Math.sin(LOCK_POLAR) * Math.sin(az),
+              r * Math.cos(LOCK_POLAR),
+              r * Math.sin(LOCK_POLAR) * Math.cos(az)
+            )
+            camera.lookAt(controls.target)
+          }
         }
       }
       prevOrbitActive = isOrbiting && !!hasTarget
