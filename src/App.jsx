@@ -14,7 +14,8 @@ const MAX_YEARS = Math.max(...nodes.map(n => n.years))
 
 // ── Stats Widget ─────────────────────────────────────────────────────────────
 function StatsWidget() {
-  const statsRef = useKnowledgeStore(state => state.statsRef)
+  const showStats = useKnowledgeStore(state => state.showStats)
+  const statsRef  = useKnowledgeStore(state => state.statsRef)
   const fpsValRef = useRef(null)
   const fpsBarRef = useRef(null)
   const memValRef = useRef(null)
@@ -68,6 +69,8 @@ function StatsWidget() {
     return () => cancelAnimationFrame(rafId)
   }, [statsRef])
 
+  if (!showStats) return null
+
   return (
     <div className="stats-widget">
       <div className="stats-header">PERF</div>
@@ -105,8 +108,9 @@ const TIER_NAMES  = { 0: 'Foundation', 1: 'Core Platform', 2: 'Framework', 3: 'L
 
 function InfoPanel() {
   const selectedNode = useKnowledgeStore(state => state.selectedNode)
-  const orbitActive = useKnowledgeStore(state => state.orbitActive)
-  const closePanel = useKnowledgeStore(state => state.closePanel)
+  const orbitActive  = useKnowledgeStore(state => state.orbitActive)
+  const lockView     = useKnowledgeStore(state => state.lockView)
+  const closePanel   = useKnowledgeStore(state => state.closePanel)
   const toggleOrbit = useKnowledgeStore(state => state.toggleOrbit)
   const setSelectedNode = useKnowledgeStore(state => state.setSelectedNode)
   const setHoveredNodeId = useKnowledgeStore(state => state.setHoveredNodeId)
@@ -138,7 +142,8 @@ function InfoPanel() {
 
   const node = selectedNode
   const cats = node.categories || []
-  const primaryCat = categories[cats[0]]
+  const NEUTRAL_CAT = { color: '#d1d5db', name: '' }
+  const primaryCat = categories[cats[0]] ?? NEUTRAL_CAT
   const otherCats = cats.slice(1)
   const tier = node.tier ?? 2
 
@@ -161,13 +166,15 @@ function InfoPanel() {
   const expPct = Math.round((node.years / MAX_YEARS) * 100)
 
   return (
-    <aside className="info-panel" style={{ '--cat': primaryCat.color }}>
+    <aside className={`info-panel${lockView ? ' info-panel--lock' : ''}`} style={{ '--cat': primaryCat.color }}>
 
       <div className="panel-head">
         <div className="panel-head-left" style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-          <span className="panel-category-tag" style={{ color: primaryCat.color, borderColor: primaryCat.color }}>
-            {primaryCat.name}
-          </span>
+          {cats.length > 0 && (
+            <span className="panel-category-tag" style={{ color: primaryCat.color, borderColor: primaryCat.color }}>
+              {primaryCat.name}
+            </span>
+          )}
           <span className={`tier-badge tier-${tier}`} title={TIER_NAMES[tier]}>
             {TIER_LABELS[tier]}
           </span>
@@ -227,10 +234,10 @@ function InfoPanel() {
           <span className="panel-section-label">BUILT ON</span>
           <div className="connection-tags">
             {parents.map(n => {
-              const pCat = categories[n.categories?.[0]]
+              const pCat = categories[n.categories?.[0]] ?? NEUTRAL_CAT
               return (
-                <span 
-                  key={n.id} 
+                <span
+                  key={n.id}
                   className="conn-tag conn-tag-parent conn-tag-clickable"
                   style={{ borderColor: pCat.color, color: pCat.color }}
                   onClick={(e) => handleNodeClick(n, e)}
@@ -251,10 +258,10 @@ function InfoPanel() {
           <span className="panel-section-label">CHILDREN</span>
           <div className="connection-tags">
             {children.map(n => {
-              const cCat = categories[n.categories?.[0]]
+              const cCat = categories[n.categories?.[0]] ?? NEUTRAL_CAT
               return (
-                <span 
-                  key={n.id} 
+                <span
+                  key={n.id}
                   className="conn-tag conn-tag-clickable"
                   style={{ borderColor: cCat.color, color: cCat.color }}
                   onClick={(e) => handleNodeClick(n, e)}
@@ -275,10 +282,10 @@ function InfoPanel() {
           <span className="panel-section-label">LINKED NODES ({connected.length})</span>
           <div className="connection-tags">
             {connected.map(n => {
-              const cCat = categories[n.categories?.[0]]
+              const cCat = categories[n.categories?.[0]] ?? NEUTRAL_CAT
               return (
-                <span 
-                  key={n.id} 
+                <span
+                  key={n.id}
                   className="conn-tag conn-tag-clickable"
                   style={{ borderColor: cCat.color, color: cCat.color }}
                   onClick={(e) => handleNodeClick(n, e)}
@@ -410,38 +417,78 @@ function FilterBar() {
 // ── App ──────────────────────────────────────────────────────────────────────
 // ── Settings Panel ───────────────────────────────────────────────────────────
 function SettingsPanel() {
-  const settingsOpen = useKnowledgeStore(state => state.settingsOpen)
-  const showCategoryLabels = useKnowledgeStore(state => state.showCategoryLabels)
-  const showClusterCenters = useKnowledgeStore(state => state.showClusterCenters)
-  const toggleCategoryLabels = useKnowledgeStore(state => state.toggleCategoryLabels)
-  const toggleClusterCenters = useKnowledgeStore(state => state.toggleClusterCenters)
-  const setSettingsOpen = useKnowledgeStore(state => state.setSettingsOpen)
-  
+  const settingsOpen        = useKnowledgeStore(state => state.settingsOpen)
+  const showCategoryLabels  = useKnowledgeStore(state => state.showCategoryLabels)
+  const showClusterCenters  = useKnowledgeStore(state => state.showClusterCenters)
+  const showStats           = useKnowledgeStore(state => state.showStats)
+  const lockView            = useKnowledgeStore(state => state.lockView)
+  const showNodeLabels      = useKnowledgeStore(state => state.showNodeLabels)
+  const toggleCategoryLabels    = useKnowledgeStore(state => state.toggleCategoryLabels)
+  const toggleClusterCenters    = useKnowledgeStore(state => state.toggleClusterCenters)
+  const toggleShowStats         = useKnowledgeStore(state => state.toggleShowStats)
+  const toggleLockView          = useKnowledgeStore(state => state.toggleLockView)
+  const toggleShowNodeLabels    = useKnowledgeStore(state => state.toggleShowNodeLabels)
+  const setSettingsOpen     = useKnowledgeStore(state => state.setSettingsOpen)
+
   if (!settingsOpen) return null
-  
+
   return (
     <div className="settings-panel" onClick={(e) => e.stopPropagation()}>
       <div className="settings-header">
         <span className="settings-title">Settings</span>
         <button className="settings-close" onClick={() => setSettingsOpen(false)}>✕</button>
       </div>
-      
+
+      <div className="settings-section">
+        <span className="settings-section-title">View</span>
+
+        <label className="settings-toggle">
+          <input
+            type="checkbox"
+            checked={showStats}
+            onChange={toggleShowStats}
+          />
+          <span className="toggle-slider"></span>
+          <span className="toggle-label">Show Performance Widget</span>
+        </label>
+
+        <label className="settings-toggle">
+          <input
+            type="checkbox"
+            checked={lockView}
+            onChange={toggleLockView}
+          />
+          <span className="toggle-slider"></span>
+          <span className="toggle-label">Lock Equatorial View</span>
+        </label>
+
+        <label className="settings-toggle">
+          <input
+            type="checkbox"
+            checked={showNodeLabels}
+            onChange={toggleShowNodeLabels}
+          />
+          <span className="toggle-slider"></span>
+          <span className="toggle-label">Show Node Labels</span>
+        </label>
+      </div>
+
       <div className="settings-section">
         <span className="settings-section-title">Debug Tools</span>
-        
+
         <label className="settings-toggle">
-          <input 
-            type="checkbox" 
+          <input
+            type="checkbox"
             checked={showCategoryLabels}
             onChange={toggleCategoryLabels}
           />
           <span className="toggle-slider"></span>
           <span className="toggle-label">Show Category Labels</span>
         </label>
-        
+
         <label className="settings-toggle">
-          <input 
-            type="checkbox" 
+          <input
+            type="checkbox"
             checked={showClusterCenters}
             onChange={toggleClusterCenters}
           />
