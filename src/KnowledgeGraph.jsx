@@ -1094,6 +1094,25 @@ export function KnowledgeGraph() {
       if (!nodeId || nodeId === prev) {
         selectedRef.current = null
         onSelectRef.current(null)
+        // ── Return to equatorial view on deselect when lock mode is active ──
+        if (lockViewRef?.current) {
+          const LOCK_POLAR = Math.PI / 2 - Math.PI * 25 / 180
+          const RETURN_DIST = 40
+          const az = Math.atan2(camera.position.x, camera.position.z)
+          const returnPos = new THREE.Vector3(
+            RETURN_DIST * Math.sin(LOCK_POLAR) * Math.sin(az),
+            RETURN_DIST * Math.cos(LOCK_POLAR),
+            RETURN_DIST * Math.sin(LOCK_POLAR) * Math.cos(az)
+          )
+          cameraAnimRef.current.isAnimating = true
+          cameraAnimRef.current.isReturn    = true
+          cameraAnimRef.current.startPos.copy(camera.position)
+          cameraAnimRef.current.targetPos.copy(returnPos)
+          cameraAnimRef.current.startTime = performance.now()
+          cameraAnimRef.current.duration  = 900
+          // Do NOT disable controls — return animation just overrides camera.position
+          // directly each frame; disabling controls can leave them stuck
+        }
         return
       }
       selectedRef.current = nodeId
