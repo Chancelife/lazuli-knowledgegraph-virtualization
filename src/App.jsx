@@ -1,6 +1,7 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useRef, useEffect } from 'react'
 import { KnowledgeGraph, MM_W, MM_H, MM_MARGIN } from './KnowledgeGraph.jsx'
 import { nodes, edges, categories, nodesMap } from './data.js'
+import { useKnowledgeStore } from './store.js'
 
 const LEVEL_COLORS = {
   Expert:       '#22c55e',
@@ -12,7 +13,8 @@ const LEVEL_COLORS = {
 const MAX_YEARS = Math.max(...nodes.map(n => n.years))
 
 // ── Stats Widget ─────────────────────────────────────────────────────────────
-function StatsWidget({ statsRef }) {
+function StatsWidget() {
+  const statsRef = useKnowledgeStore(state => state.statsRef)
   const fpsValRef = useRef(null)
   const fpsBarRef = useRef(null)
   const memValRef = useRef(null)
@@ -22,14 +24,13 @@ function StatsWidget({ statsRef }) {
 
   useEffect(() => {
     let rafId
-    const MEM_MAX = 500  // MB ceiling for bar scale
-    const GPU_MAX = 33.3 // ms ceiling (≈ 30 fps budget)
+    const MEM_MAX = 500
+    const GPU_MAX = 33.3
 
     function tick() {
       rafId = requestAnimationFrame(tick)
       const { fps = 0, gpuMs = 0, gpuSupported = false } = statsRef.current ?? {}
 
-      // FPS
       if (fpsValRef.current) {
         fpsValRef.current.textContent = fps
         const ok = fps >= 50, warn = fps >= 30
@@ -38,7 +39,6 @@ function StatsWidget({ statsRef }) {
         fpsBarRef.current.style.background = ok ? '#4ade80' : warn ? '#fbbf24' : '#f87171'
       }
 
-      // Memory
       if (memValRef.current) {
         if (performance.memory) {
           const mb = (performance.memory.usedJSHeapSize / 1048576).toFixed(1)
@@ -50,7 +50,6 @@ function StatsWidget({ statsRef }) {
         }
       }
 
-      // GPU
       if (gpuValRef.current) {
         if (gpuSupported) {
           gpuValRef.current.textContent = `${gpuMs} ms`
@@ -100,28 +99,60 @@ function StatsWidget({ statsRef }) {
   )
 }
 
-const TIER_LABELS = { 1: 'L1', 2: 'L2', 3: 'L3' }
-const TIER_NAMES  = { 1: 'Core Platform', 2: 'Framework', 3: 'Library' }
-
 // ── Info Panel ──────────────────────────────────────────────────────────────
-function InfoPanel({ node, onClose, orbitActive, onToggleOrbit }) {
-  const cat  = categories[node.category]
-  const tier = node.tier || 2
+const TIER_LABELS = { 0: 'F', 1: 'L1', 2: 'L2', 3: 'L3' }
+const TIER_NAMES  = { 0: 'Foundation', 1: 'Core Platform', 2: 'Framework', 3: 'Library' }
 
-  // Semantic connections only (exclude hierarchy edges)
+function InfoPanel() {
+  const selectedNode = useKnowledgeStore(state => state.selectedNode)
+  const orbitActive = useKnowledgeStore(state => state.orbitActive)
+  const closePanel = useKnowledgeStore(state => state.closePanel)
+  const toggleOrbit = useKnowledgeStore(state => state.toggleOrbit)
+  const setSelectedNode = useKnowledgeStore(state => state.setSelectedNode)
+  const setHoveredNodeId = useKnowledgeStore(state => state.setHoveredNodeId)
+  const navigateToNode = useKnowledgeStore(state => state.navigateToNode)
+  
+  const handleNodeClick = (node, e) => {
+    // Prevent default behavior and stop propagation
+    if (e) {
+      e.preventDefault()
+      e.stopPropagation()
+    }
+    
+    // Don't navigate if clicking the currently selected node
+    if (selectedNode?.id === node.id) return
+    
+    // Navigate with camera animation - this updates both camera target and selected node
+    navigateToNode(node)
+  }
+  
+  const handleNodeHover = (nodeId) => {
+    setHoveredNodeId(nodeId)
+  }
+  
+  const handleNodeHoverEnd = () => {
+    setHoveredNodeId(null)
+  }
+
+  if (!selectedNode) return null
+
+  const node = selectedNode
+  const cats = node.categories || []
+  const primaryCat = categories[cats[0]]
+  const otherCats = cats.slice(1)
+  const tier = node.tier ?? 2
+
   const connected = edges
     .filter(e => !e.type && (e.source === node.id || e.target === node.id))
     .map(e => e.source === node.id ? e.target : e.source)
     .map(id => nodesMap[id])
     .filter(Boolean)
 
-  // Hierarchy: parents (edges where this node is the child)
   const parents = edges
     .filter(e => e.type === 'hierarchy' && e.target === node.id)
     .map(e => nodesMap[e.source])
     .filter(Boolean)
 
-  // Hierarchy: children (edges where this node is the parent)
   const children = edges
     .filter(e => e.type === 'hierarchy' && e.source === node.id)
     .map(e => nodesMap[e.target])
@@ -130,24 +161,22 @@ function InfoPanel({ node, onClose, orbitActive, onToggleOrbit }) {
   const expPct = Math.round((node.years / MAX_YEARS) * 100)
 
   return (
-    <aside className="info-panel" style={{ '--cat': cat.color }}>
+    <aside className="info-panel" style={{ '--cat': primaryCat.color }}>
 
-      {/* ── Header ── */}
       <div className="panel-head">
         <div className="panel-head-left" style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-          <span className="panel-category-tag" style={{ color: cat.color, borderColor: cat.color }}>
-            {cat.name}
+          <span className="panel-category-tag" style={{ color: primaryCat.color, borderColor: primaryCat.color }}>
+            {primaryCat.name}
           </span>
           <span className={`tier-badge tier-${tier}`} title={TIER_NAMES[tier]}>
             {TIER_LABELS[tier]}
           </span>
         </div>
-        <button className="panel-close" onClick={onClose} aria-label="close">✕</button>
+        <button className="panel-close" onClick={closePanel} aria-label="close">✕</button>
       </div>
 
       <h2 className="panel-title">{node.label}</h2>
 
-      {/* ── Stats row ── */}
       <div className="panel-stats-row">
         <div className="panel-stat-cell">
           <span className="psc-label">LEVEL</span>
@@ -160,33 +189,30 @@ function InfoPanel({ node, onClose, orbitActive, onToggleOrbit }) {
           <span className="psc-value">{node.years} yr{node.years !== 1 ? 's' : ''}</span>
         </div>
         <div className="panel-stat-cell">
-          <span className="psc-label">CONNECTIONS</span>
-          <span className="psc-value">{connected.length}</span>
+          <span className="psc-label">TIER</span>
+          <span className="psc-value">{TIER_NAMES[tier]}</span>
         </div>
       </div>
 
-      {/* ── Experience bar ── */}
       <div className="exp-bar-wrap">
         <div className="exp-bar-header">
           <span className="exp-bar-label">Proficiency</span>
           <span className="exp-bar-pct">{expPct}%</span>
         </div>
         <div className="exp-bar-track">
-          <div className="exp-bar-fill" style={{ width: `${expPct}%`, background: cat.color }} />
+          <div className="exp-bar-fill" style={{ width: `${expPct}%`, background: primaryCat.color }} />
         </div>
       </div>
 
       <div className="panel-divider" />
 
-      {/* ── Description ── */}
       <p className="panel-description">{node.description}</p>
 
-      {/* ── Cross-category membership ── */}
-      {node.secondaryCategories?.length > 0 && (
+      {otherCats.length > 0 && (
         <div className="panel-connections">
           <span className="panel-section-label">ALSO IN</span>
           <div className="connection-tags">
-            {node.secondaryCategories.map(catId => (
+            {otherCats.map(catId => (
               <span key={catId} className="conn-tag"
                 style={{ borderColor: categories[catId].color, color: categories[catId].color }}>
                 {categories[catId].name}
@@ -196,58 +222,84 @@ function InfoPanel({ node, onClose, orbitActive, onToggleOrbit }) {
         </div>
       )}
 
-      {/* ── Hierarchy: parents ── */}
       {parents.length > 0 && (
         <div className="panel-connections" style={{ marginTop: '8px' }}>
           <span className="panel-section-label">BUILT ON</span>
           <div className="connection-tags">
-            {parents.map(n => (
-              <span key={n.id} className="conn-tag conn-tag-parent"
-                style={{ borderColor: categories[n.category].color, color: categories[n.category].color }}>
-                ↑ {n.label}
-              </span>
-            ))}
+            {parents.map(n => {
+              const pCat = categories[n.categories?.[0]]
+              return (
+                <span 
+                  key={n.id} 
+                  className="conn-tag conn-tag-parent conn-tag-clickable"
+                  style={{ borderColor: pCat.color, color: pCat.color }}
+                  onClick={(e) => handleNodeClick(n, e)}
+                  onMouseEnter={() => handleNodeHover(n.id)}
+                  onMouseLeave={handleNodeHoverEnd}
+                  title={`Go to ${n.label}`}
+                >
+                  ↑ {n.label}
+                </span>
+              )
+            })}
           </div>
         </div>
       )}
 
-      {/* ── Hierarchy: children ── */}
       {children.length > 0 && (
         <div className="panel-connections" style={{ marginTop: '8px' }}>
           <span className="panel-section-label">CHILDREN</span>
           <div className="connection-tags">
-            {children.map(n => (
-              <span key={n.id} className="conn-tag"
-                style={{ borderColor: categories[n.category].color, color: categories[n.category].color }}>
-                {n.label}
-              </span>
-            ))}
+            {children.map(n => {
+              const cCat = categories[n.categories?.[0]]
+              return (
+                <span 
+                  key={n.id} 
+                  className="conn-tag conn-tag-clickable"
+                  style={{ borderColor: cCat.color, color: cCat.color }}
+                  onClick={(e) => handleNodeClick(n, e)}
+                  onMouseEnter={() => handleNodeHover(n.id)}
+                  onMouseLeave={handleNodeHoverEnd}
+                  title={`Go to ${n.label}`}
+                >
+                  {n.label}
+                </span>
+              )
+            })}
           </div>
         </div>
       )}
 
-      {/* ── Semantic connections ── */}
       {connected.length > 0 && (
         <div className="panel-connections" style={{ marginTop: '8px' }}>
-          <span className="panel-section-label">LINKED NODES</span>
+          <span className="panel-section-label">LINKED NODES ({connected.length})</span>
           <div className="connection-tags">
-            {connected.map(n => (
-              <span key={n.id} className="conn-tag"
-                style={{ borderColor: categories[n.category].color, color: categories[n.category].color }}>
-                {n.label}
-              </span>
-            ))}
+            {connected.map(n => {
+              const cCat = categories[n.categories?.[0]]
+              return (
+                <span 
+                  key={n.id} 
+                  className="conn-tag conn-tag-clickable"
+                  style={{ borderColor: cCat.color, color: cCat.color }}
+                  onClick={(e) => handleNodeClick(n, e)}
+                  onMouseEnter={() => handleNodeHover(n.id)}
+                  onMouseLeave={handleNodeHoverEnd}
+                  title={`Go to ${n.label}`}
+                >
+                  {n.label}
+                </span>
+              )
+            })}
           </div>
         </div>
       )}
 
-      <div className="panel-divider" />
+      <div className="panel-divider" style={{ margin: '14px 0 10px' }} />
 
-      {/* ── Orbit action button ── */}
       <button
         className={`orbit-btn ${orbitActive ? 'active' : ''}`}
-        onClick={onToggleOrbit}
-        title={orbitActive ? '停止巡航' : '围绕星球巡航'}
+        onClick={toggleOrbit}
+        title={orbitActive ? 'Stop Orbit' : 'Orbit Around Node'}
       >
         <svg className="orbit-btn-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6">
           <circle cx="10" cy="10" r="3" />
@@ -255,7 +307,7 @@ function InfoPanel({ node, onClose, orbitActive, onToggleOrbit }) {
           <path d="M18 10 l-2.5-2 M18 10 l-2.5 2" />
         </svg>
         <span className="orbit-btn-label">
-          {orbitActive ? '停止巡航' : '主视角巡航'}
+          {orbitActive ? 'Stop Orbit' : 'Cockpit View'}
         </span>
         {orbitActive && <span className="orbit-live-badge">LIVE</span>}
       </button>
@@ -265,22 +317,90 @@ function InfoPanel({ node, onClose, orbitActive, onToggleOrbit }) {
 }
 
 // ── Filter Bar ───────────────────────────────────────────────────────────────
-function FilterBar({ active, onToggle }) {
+function FilterBar() {
+  const active = useKnowledgeStore(state => state.activeCategories)
+  const toggleCategory = useKnowledgeStore(state => state.toggleCategory)
+  const hoveredCat = useKnowledgeStore(state => state.hoveredCat)
+  const setHoveredCat = useKnowledgeStore(state => state.setHoveredCat)
+  const openCat = useKnowledgeStore(state => state.openCat)
+  const setOpenCat = useKnowledgeStore(state => state.setOpenCat)
+  const closeTimeoutRef = useRef(null)
+  const CLOSE_DELAY = 200
+
+  const getSkillNodes = (catId) => {
+    return nodes.filter(n => 
+      n.categories?.includes(catId) && (n.tier === 0 || n.tier === 1 || n.tier === 2)
+    )
+  }
+
+  const handleMouseEnter = (catId) => {
+    if (closeTimeoutRef.current) {
+      clearTimeout(closeTimeoutRef.current)
+      closeTimeoutRef.current = null
+    }
+    setHoveredCat(catId)
+    setOpenCat(catId)
+  }
+
+  const handleMouseLeave = () => {
+    setHoveredCat(null)
+    closeTimeoutRef.current = setTimeout(() => {
+      setOpenCat(null)
+    }, CLOSE_DELAY)
+  }
+
   return (
     <nav className="filter-bar">
       {Object.values(categories).map(cat => {
         const isActive = active.has(cat.id)
+        const skillNodes = getSkillNodes(cat.id)
+        const isOpen = openCat === cat.id
+
         return (
-          <button
-            key={cat.id}
-            className={`filter-btn ${isActive ? 'active' : ''}`}
-            style={{ '--cat-color': cat.color }}
-            onClick={() => onToggle(cat.id)}
-            title={isActive ? `Hide ${cat.name}` : `Show ${cat.name}`}
-          >
-            <span className="filter-dot" />
-            {cat.name}
-          </button>
+          <div key={cat.id} className="filter-btn-wrapper">
+            <button
+              className={`filter-btn ${isActive ? 'active' : ''}`}
+              style={{ '--cat-color': cat.color }}
+              onClick={() => toggleCategory(cat.id)}
+              onMouseEnter={() => handleMouseEnter(cat.id)}
+              onMouseLeave={handleMouseLeave}
+              title={isActive ? `Hide ${cat.name}` : `Show ${cat.name}`}
+            >
+              <span className="filter-dot" />
+              {cat.name}
+            </button>
+
+            {isOpen && skillNodes.length > 0 && (
+              <div 
+                className="skill-list-popup"
+                style={{ '--cat-color': cat.color }}
+                onMouseEnter={() => handleMouseEnter(cat.id)}
+                onMouseLeave={handleMouseLeave}
+              >
+                <div className="skill-list-header">
+                  <span className="skill-list-title">{cat.name}</span>
+                  <span className="skill-list-count">{skillNodes.length} Skills</span>
+                </div>
+                <div className="skill-list">
+                  {skillNodes.map((node, idx) => (
+                    <div 
+                      key={node.id}
+                      className="skill-list-item"
+                      style={{ animationDelay: `${idx * 40}ms` }}
+                    >
+                      <span className="skill-list-name">{node.label}</span>
+                      <span 
+                        className="skill-list-level"
+                        style={{ color: LEVEL_COLORS[node.level] }}
+                      >
+                        {node.level}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         )
       })}
     </nav>
@@ -288,79 +408,103 @@ function FilterBar({ active, onToggle }) {
 }
 
 // ── App ──────────────────────────────────────────────────────────────────────
-export default function App() {
-  const graphStatsRef  = useRef({ fps: 0, gpuMs: 0, gpuSupported: false })
-  const mmExpandedRef  = useRef(false)
-  const mmFrameRef     = useRef(null)
-  const orbitActiveRef = useRef(false)
-  const [mmExpanded,   setMmExpanded]   = useState(false)
-  const [orbitActive,  setOrbitActive]  = useState(false)
-  const [selectedNode, setSelectedNode] = useState(null)
-  const [activeCategories, setActiveCategories] = useState(
-    () => new Set(Object.keys(categories))
+// ── Settings Panel ───────────────────────────────────────────────────────────
+function SettingsPanel() {
+  const settingsOpen = useKnowledgeStore(state => state.settingsOpen)
+  const showCategoryLabels = useKnowledgeStore(state => state.showCategoryLabels)
+  const showClusterCenters = useKnowledgeStore(state => state.showClusterCenters)
+  const toggleCategoryLabels = useKnowledgeStore(state => state.toggleCategoryLabels)
+  const toggleClusterCenters = useKnowledgeStore(state => state.toggleClusterCenters)
+  const setSettingsOpen = useKnowledgeStore(state => state.setSettingsOpen)
+  
+  if (!settingsOpen) return null
+  
+  return (
+    <div className="settings-panel" onClick={(e) => e.stopPropagation()}>
+      <div className="settings-header">
+        <span className="settings-title">Settings</span>
+        <button className="settings-close" onClick={() => setSettingsOpen(false)}>✕</button>
+      </div>
+      
+      <div className="settings-section">
+        <span className="settings-section-title">Debug Tools</span>
+        
+        <label className="settings-toggle">
+          <input 
+            type="checkbox" 
+            checked={showCategoryLabels}
+            onChange={toggleCategoryLabels}
+          />
+          <span className="toggle-slider"></span>
+          <span className="toggle-label">Show Category Labels</span>
+        </label>
+        
+        <label className="settings-toggle">
+          <input 
+            type="checkbox" 
+            checked={showClusterCenters}
+            onChange={toggleClusterCenters}
+          />
+          <span className="toggle-slider"></span>
+          <span className="toggle-label">Show Cluster Centers</span>
+        </label>
+      </div>
+    </div>
   )
+}
 
-  const toggleCategory = useCallback((catId) => {
-    setActiveCategories(prev => {
-      const next = new Set(prev)
-      if (next.has(catId)) {
-        // keep at least one category visible
-        if (next.size > 1) next.delete(catId)
-      } else {
-        next.add(catId)
-      }
-      return next
-    })
-  }, [])
+// ── Settings Button ──────────────────────────────────────────────────────────
+function SettingsButton() {
+  const settingsOpen = useKnowledgeStore(state => state.settingsOpen)
+  const toggleSettings = useKnowledgeStore(state => state.toggleSettings)
+  
+  return (
+    <>
+      <button 
+        className={`settings-btn ${settingsOpen ? 'active' : ''}`}
+        onClick={toggleSettings}
+        title="Settings"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        </svg>
+      </button>
+      <SettingsPanel />
+    </>
+  )
+}
 
-  const handleNodeSelect = useCallback((node) => {
-    setSelectedNode(node)
-  }, [])
-
-  const toggleMinimap = useCallback(() => {
-    setMmExpanded(prev => {
-      mmExpandedRef.current = !prev
-      return !prev
-    })
-  }, [])
-
-  const toggleOrbit = useCallback(() => {
-    setOrbitActive(prev => {
-      orbitActiveRef.current = !prev
-      return !prev
-    })
-  }, [])
+// ── App ──────────────────────────────────────────────────────────────────────
+export default function App() {
+  const mmExpanded = useKnowledgeStore(state => state.mmExpanded)
+  const selectedNode = useKnowledgeStore(state => state.selectedNode)
+  const mmFrameRef = useKnowledgeStore(state => state.mmFrameRef)
+  const toggleMinimap = useKnowledgeStore(state => state.toggleMinimap)
+  const openCat = useKnowledgeStore(state => state.openCat)
+  
+  // Dynamic content panel position based on skill list visibility
+  const panelTopPosition = openCat ? '35%' : '45%'
 
   return (
-    <div className="app">
-      {/* Three.js canvas */}
+    <div className="app" style={{ '--panel-top': panelTopPosition }}>
       <div className="canvas-wrap">
-        <KnowledgeGraph
-          activeCategories={activeCategories}
-          onNodeSelect={handleNodeSelect}
-          statsRef={graphStatsRef}
-          mmExpandedRef={mmExpandedRef}
-          mmFrameRef={mmFrameRef}
-          orbitActiveRef={orbitActiveRef}
-        />
+        <KnowledgeGraph />
       </div>
 
-      {/* Performance stats widget */}
-      <StatsWidget statsRef={graphStatsRef} />
+      <StatsWidget />
 
-      {/* Title */}
       <header className="title-block">
         <h1>Knowledge Graph</h1>
         <p>{nodes.length} skills &nbsp;·&nbsp; {edges.filter(e => !e.type).length} connections</p>
       </header>
 
-      {/* Hint */}
+      <SettingsButton />
+
       <p className="hint">Drag to orbit &nbsp;·&nbsp; Scroll to zoom &nbsp;·&nbsp; Click a node to inspect</p>
 
-      {/* Category filter */}
-      <FilterBar active={activeCategories} onToggle={toggleCategory} />
+      <FilterBar />
 
-      {/* Minimap decorative frame overlay (actual 3D content is drawn by the renderer via scissor) */}
       <div
         ref={mmFrameRef}
         className="minimap-frame"
@@ -370,22 +514,14 @@ export default function App() {
         <button
           className={`minimap-toggle ${mmExpanded ? 'expanded' : ''}`}
           onClick={toggleMinimap}
-          title={mmExpanded ? '缩小小地图' : '放大小地图'}
+          title={mmExpanded ? 'Collapse Minimap' : 'Expand Minimap'}
         >
           {mmExpanded ? '⊡' : '⛶'}
         </button>
-        <span className="minimap-hint">拖动可旋转视角</span>
+        <span className="minimap-hint">Drag to rotate view</span>
       </div>
 
-      {/* Node info panel */}
-      {selectedNode && (
-        <InfoPanel
-          node={selectedNode}
-          onClose={() => { setSelectedNode(null); setOrbitActive(false); orbitActiveRef.current = false }}
-          orbitActive={orbitActive}
-          onToggleOrbit={toggleOrbit}
-        />
-      )}
+      <InfoPanel />
     </div>
   )
 }
