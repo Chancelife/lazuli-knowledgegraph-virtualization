@@ -1,9 +1,10 @@
 export const categories = {
-  frontend: { id: 'frontend', name: 'Frontend',       color: '#22d3ee' },
-  backend:  { id: 'backend',  name: 'Backend',        color: '#a855f7' },
-  devops:   { id: 'devops',   name: 'DevOps / Cloud', color: '#fb923c' },
-  aiml:     { id: 'aiml',     name: 'AI / ML',        color: '#f472b6' },
-  depipe:   { id: 'depipe',   name: 'DE / Pipeline',  color: '#fbbf24' },
+  frontend: { id: 'frontend',  name: 'Frontend',       color: '#22d3ee' },
+  backend:  { id: 'backend',   name: 'Backend',        color: '#a855f7' },
+  devops:   { id: 'devops',    name: 'DevOps',         color: '#fb923c' },
+  aiml:     { id: 'aiml',      name: 'AI / ML',        color: '#f472b6' },
+  depipe:   { id: 'depipe',    name: 'DE / Pipeline',  color: '#fbbf24' },
+  database: { id: 'database',  name: 'Database',       color: '#10b981' },
 }
 
 // Tier 0: Foundation - Cross-category infrastructure / languages
@@ -18,35 +19,32 @@ export const nodes = [
 
   // ── Foundation: Programming Languages ────────────────────────────────────────
   {
-    id: 'javascript', label: 'JavaScript', categories: ['frontend', 'backend'], tier: 0, level: 'Expert', years: 5,
+    id: 'javascript', label: 'JavaScript', categories: [], tier: 0, subtype: 'center', level: 'Expert', years: 5,
     description: 'The universal language of the web. Powers browser UIs, server-side applications via Node.js, and the modern full-stack ecosystem.',
   },
   {
-    id: 'python', label: 'Python', categories: ['backend', 'aiml', 'depipe'], tier: 0, level: 'Advanced', years: 3,
+    id: 'python', label: 'Python', categories: [], tier: 0, subtype: 'center', level: 'Advanced', years: 3,
     description: 'Versatile language spanning backend APIs, data science, machine learning, and data engineering pipelines.',
   },
   {
-    id: 'java', label: 'Java', categories: ['backend', 'depipe'], tier: 0, level: 'Advanced', years: 3,
+    id: 'java', label: 'Java', categories: [], tier: 0, subtype: 'center', level: 'Advanced', years: 3,
     description: 'Enterprise-grade language powering large-scale backend services, distributed systems, and big-data frameworks.',
   },
 
   // ── Foundation: Infrastructure ───────────────────────────────────────────────
   {
-    id: 'docker', label: 'Docker', categories: ['devops', 'backend'], tier: 0, level: 'Advanced', years: 3,
+    id: 'docker', label: 'Docker', categories: [], tier: 0, subtype: 'satellite', level: 'Advanced', years: 3,
     description: 'Containerization platform for packaging applications with dependencies into portable, reproducible images.',
   },
   {
-    id: 'aws', label: 'AWS', categories: ['devops', 'backend', 'aiml', 'depipe'], tier: 0, level: 'Intermediate', years: 2,
+    id: 'aws', label: 'AWS', categories: [], tier: 0, subtype: 'satellite', level: 'Intermediate', years: 2,
     description: 'Comprehensive cloud platform providing compute, storage, databases, and managed services across all domains.',
   },
   {
-    id: 'postgresql', label: 'PostgreSQL', categories: ['backend', 'aiml', 'depipe'], tier: 0, level: 'Advanced', years: 3,
-    description: 'Powerful open-source relational database with JSONB, full-text search, and pgvector extension for AI applications.',
-  },
-  {
-    id: 'kubernetes', label: 'Kubernetes', categories: ['devops', 'backend'], tier: 0, level: 'Beginner', years: 1,
+    id: 'kubernetes', label: 'Kubernetes', categories: [], tier: 0, subtype: 'center', level: 'Beginner', years: 1,
     description: 'Container orchestration system for automating deployment, scaling, and management of containerized workloads.',
   },
+
 
   // ═════════════════════════════════════════════════════════════════════════════
   // ║ TIER 1: CORE - Frameworks and platforms                                   ║
@@ -66,7 +64,7 @@ export const nodes = [
     description: 'Progressive JavaScript framework with reactivity system and single-file components for building UIs.',
   },
   {
-    id: 'typescript', label: 'TypeScript', categories: ['frontend', 'backend'], tier: 1, level: 'Advanced', years: 3,
+    id: 'typescript', label: 'TypeScript', categories: [], tier: 0, subtype: 'center', level: 'Advanced', years: 3,
     description: 'Typed superset of JavaScript adding static types, interfaces, and enhanced tooling for large codebases.',
   },
 
@@ -83,15 +81,32 @@ export const nodes = [
     id: 'fastapi', label: 'FastAPI', categories: ['backend'], tier: 1, level: 'Intermediate', years: 2,
     description: 'Modern, high-performance Python web framework with automatic OpenAPI documentation and async support.',
   },
+  // ── Database ── Core Systems ─────────────────────────────────────────────────
   {
-    id: 'redis', label: 'Redis', categories: ['backend'], tier: 1, level: 'Intermediate', years: 2,
-    description: 'In-memory data store used for caching, session management, pub/sub messaging, and rate limiting.',
+    id: 'postgresql', label: 'PostgreSQL', categories: ['database'], tier: 1, level: 'Advanced', years: 3,
+    description: 'Powerful open-source relational database with JSONB, full-text search, and pgvector extension for AI applications.',
+  },
+  {
+    id: 'mysql', label: 'MySQL', categories: ['database'], tier: 1, level: 'Advanced', years: 3,
+    description: 'Widely-adopted open-source relational database powering web applications, microservices, and enterprise systems.',
+  },
+  {
+    id: 'mongodb', label: 'MongoDB', categories: ['database'], tier: 1, level: 'Intermediate', years: 2,
+    description: 'Document-oriented NoSQL database with flexible schema design and horizontal scaling for modern applications.',
+  },
+  {
+    id: 'redis', label: 'Redis', categories: ['database', 'backend'], tier: 1, level: 'Intermediate', years: 2,
+    description: 'In-memory data structure store used as a database, cache, and message broker with sub-millisecond latency.',
   },
 
   // ── DevOps ── Core Platforms ─────────────────────────────────────────────────
   {
-    id: 'cicd', label: 'CI / CD', categories: ['devops'], tier: 1, level: 'Advanced', years: 3,
-    description: 'Automated testing and deployment pipelines using GitHub Actions, keeping releases fast and reliable.',
+    id: 'github_actions', label: 'GitHub Actions', categories: ['devops'], tier: 1, level: 'Advanced', years: 3,
+    description: 'CI/CD automation platform native to GitHub for building, testing, and deploying workflows triggered by repository events.',
+  },
+  {
+    id: 'pulumi', label: 'Pulumi', categories: ['devops'], tier: 1, level: 'Beginner', years: 1,
+    description: 'Infrastructure-as-Code platform using general-purpose languages (TypeScript, Python, Go) to provision and manage cloud resources.',
   },
   {
     id: 'terraform', label: 'Terraform', categories: ['devops'], tier: 1, level: 'Beginner', years: 1,
@@ -112,7 +127,7 @@ export const nodes = [
     description: 'Building AI-powered features by integrating large language models via APIs (Claude, OpenAI, etc.).',
   },
   {
-    id: 'vectordb', label: 'Vector DBs', categories: ['aiml', 'backend'], tier: 1, level: 'Intermediate', years: 1,
+    id: 'vectordb', label: 'Vector DBs', categories: ['aiml', 'database'], tier: 1, level: 'Intermediate', years: 1,
     description: 'Semantic search databases (Pinecone, pgvector, Weaviate) for storing and querying dense embeddings.',
   },
 
@@ -225,14 +240,20 @@ export const edges = [
   // ── Database & Storage ───────────────────────────────────────────────────────
   { source: 'postgresql', target: 'vectordb' },
   { source: 'redis',      target: 'postgresql' },
+  { source: 'mysql',      target: 'spring_boot' },
+  { source: 'mysql',      target: 'fastapi' },
+  { source: 'mongodb',    target: 'fastapi' },
+  { source: 'mongodb',    target: 'langchain' },
 
   // ── DevOps / Cloud ───────────────────────────────────────────────────────────
   { source: 'docker',     target: 'kubernetes' },
   { source: 'docker',     target: 'aws' },
-  { source: 'docker',     target: 'cicd' },
+  { source: 'docker',     target: 'github_actions' },
   { source: 'aws',        target: 'kubernetes' },
   { source: 'aws',        target: 'terraform' },
+  { source: 'aws',        target: 'pulumi' },
   { source: 'kubernetes', target: 'terraform' },
+  { source: 'kubernetes', target: 'pulumi' },
 
   // ── AI / ML ──────────────────────────────────────────────────────────────────
   { source: 'pytorch',    target: 'llms' },
@@ -272,7 +293,7 @@ export const hierarchyEdges = [
   { source: 'python',     target: 'pytorch', type: 'hierarchy' },
   { source: 'java',       target: 'spring_boot', type: 'hierarchy' },
   { source: 'docker',     target: 'kubernetes', type: 'hierarchy' },
-  { source: 'postgresql', target: 'dbt', type: 'hierarchy' },
+  { source: 'postgresql', target: 'dbt',        type: 'hierarchy' },
 
   // Core -> Tools
   { source: 'react',      target: 'react_router', type: 'hierarchy' },
