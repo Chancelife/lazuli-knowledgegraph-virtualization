@@ -16,11 +16,16 @@ export const useKnowledgeStore = create((set, get) => ({
   settingsOpen: false,
   showCategoryLabels: true,
   showClusterCenters: false,
-  
+  showStats: true,
+  lockView: false,
+  showNodeLabels: false,
+
   // ── Refs for 3D component synchronization ───────────────────────────────
   statsRef: { current: { fps: 0, gpuMs: 0, gpuSupported: false } },
   mmExpandedRef: { current: false },
   orbitActiveRef: { current: false },
+  lockViewRef:       { current: false },
+  showNodeLabelsRef: { current: false },
   mmFrameRef: { current: null },
   hoveredNodeIdRef: { current: null },
   
@@ -89,4 +94,13 @@ export const useKnowledgeStore = create((set, get) => ({
   setSettingsOpen: (open) => set({ settingsOpen: open }),
   toggleCategoryLabels: () => set(state => ({ showCategoryLabels: !state.showCategoryLabels })),
   toggleClusterCenters: () => set(state => ({ showClusterCenters: !state.showClusterCenters })),
+  toggleShowStats:      () => set(state => ({ showStats: !state.showStats })),
+  toggleShowNodeLabels: () => set(state => {
+    state.showNodeLabelsRef.current = !state.showNodeLabels
+    return { showNodeLabels: !state.showNodeLabels }
+  }),
+  toggleLockView: () => set(state => {
+    state.lockViewRef.current = !state.lockView
+    return { lockView: !state.lockView }
+  }),
 }))
